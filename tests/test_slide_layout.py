@@ -1,7 +1,10 @@
 import sys
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
+from unittest import mock
 
 from PIL import Image
 
@@ -18,7 +21,10 @@ from build_pptx_from_manifest import (  # noqa: E402
     render_preview,
     slide_size_type,
     text_box_xml,
+    theme_xml,
+    write_pptx,
 )
+import build_pptx_from_manifest as builder  # noqa: E402
 from prepare_deck_run import fit_content_box, slide_for_source  # noqa: E402
 
 
@@ -51,6 +57,42 @@ def preview_ink_center(manifest):
 
 
 class SlideLayoutTest(unittest.TestCase):
+    def test_written_package_reuses_powerpoint_template_and_native_table(self):
+        manifest = {
+            "schema_version": 1,
+            "source": {"width_px": 1600, "height_px": 900},
+            "slide": {"width": 13.333, "height": 7.5},
+            "tables": [{
+                "box_px": [100, 100, 800, 200],
+                "cells": [[{"text": "A"}, {"text": "B"}]],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "page.pptx"
+            with mock.patch.object(builder, "validate_pptx_integrity") as integrity:
+                write_pptx(manifest, output, Path(temporary) / "manifest.json")
+            with zipfile.ZipFile(output) as package:
+                names = set(package.namelist())
+                presentation = package.read("ppt/presentation.xml").decode("utf-8")
+                slide = package.read("ppt/slides/slide1.xml").decode("utf-8")
+                app = package.read("docProps/app.xml").decode("utf-8")
+        self.assertIn("ppt/presProps.xml", names)
+        self.assertIn("ppt/viewProps.xml", names)
+        self.assertIn("ppt/slideLayouts/slideLayout7.xml", names)
+        self.assertIn('type="screen16x9"', presentation)
+        self.assertIn("<a:tbl>", slide)
+        self.assertIn("Microsoft Macintosh PowerPoint", app)
+        integrity.assert_called_once()
+
+    def test_theme_has_powerpoint_required_style_cardinality(self):
+        root = ET.fromstring(theme_xml())
+        ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+
+        self.assertEqual(3, len(root.findall(".//a:fillStyleLst/*", ns)))
+        self.assertEqual(3, len(root.findall(".//a:lnStyleLst/*", ns)))
+        self.assertEqual(3, len(root.findall(".//a:effectStyleLst/*", ns)))
+        self.assertEqual(3, len(root.findall(".//a:bgFillStyleLst/*", ns)))
+
     def test_non_wide_source_uses_source_pixel_size(self):
         slide = slide_for_source(1536, 1024)
 
@@ -94,9 +136,23 @@ class SlideLayoutTest(unittest.TestCase):
         self.assertAlmostEqual(box["width"], position["width"])
         self.assertAlmostEqual(box["height"], position["height"])
 
-    def test_non_wide_presentation_size_is_custom(self):
-        self.assertEqual("custom", slide_size_type(emu(16), emu(10.6666667)))
-        self.assertEqual("wide", slide_size_type(emu(13.333), emu(7.5)))
+    def test_presentation_size_uses_openxml_enumerations(self):
+        self.assertIsNone(slide_size_type(emu(16), emu(10.6666667)))
+        self.assertEqual("screen16x9", slide_size_type(emu(13.333), emu(7.5)))
+        self.assertEqual("screen16x10", slide_size_type(emu(12.8), emu(8)))
+        self.assertEqual("screen4x3", slide_size_type(emu(10), emu(7.5)))
+
+    def test_invalid_drawingml_values_fail_before_packaging(self):
+        with self.assertRaisesRegex(ValueError, "allowed DrawingML geometry"):
+            normalize_manifest({
+                "slide": {"width": 13.333, "height": 7.5},
+                "shapes": [{"preset": "notARealPreset"}],
+            })
+        with self.assertRaisesRegex(ValueError, "wrap must be one of"):
+            normalize_manifest({
+                "slide": {"width": 13.333, "height": 7.5},
+                "text_boxes": [{"text": "A", "wrap": "sometimes"}],
+            })
 
     def test_text_font_size_is_clamped_to_source_box(self):
         manifest = {

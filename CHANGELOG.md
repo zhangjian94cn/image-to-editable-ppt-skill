@@ -4,6 +4,17 @@ Release notes are generated from this file. Keep changelog entries in English.
 
 ## Unreleased
 
+### Features
+
+- Build editable decks from a Microsoft Macintosh PowerPoint-authored base package, retain native master/layout/theme/properties, add native editable tables, and emit a build-bound Open XML SDK 3.3.0 integrity report.
+
+### Fixes
+
+- Use legal `screen16x9`, `screen16x10`, and `screen4x3` slide-size values; complete group transforms and DrawingML theme cardinalities; reject invalid manifest enum, color, font, and numeric values before packaging.
+- Require manifest-v2 exact font files and SHA-256 provenance for every text box, table, and table cell, while keeping Pillow output explicitly labeled as a quick non-authoritative preview.
+- Fail closed before launching PowerPoint when an authored PPTX contains semantic or core Open XML errors, while narrowly allowing known Office chart-extension schema warnings that require real PowerPoint validation.
+- Derive an ephemeral, hash-recorded render copy when the only blocking errors are duplicate IDs in an orphaned legacy `commentAuthors.xml`; refuse the transform whenever real comment parts or relationships exist, leave the authored source untouched, and revalidate the derived package before PowerPoint.
+
 ### Documentation
 
 - Add complete Korean README and English and Korean versions of the Docsify usage documentation, with synchronized language navigation, search, and pagination. (#26)

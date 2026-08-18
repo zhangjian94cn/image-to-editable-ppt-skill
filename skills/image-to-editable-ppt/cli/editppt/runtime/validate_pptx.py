@@ -21,6 +21,9 @@ ALLOWED_SOURCE_TYPES = {
     "asset-sheet-separated",
     "imagegen",
     "latex-rendered-formula",
+    # A source-faithful foreground separated locally from source.png. This is
+    # a first-class provenance type, not a repository-local patch contract.
+    "local-segmentation-separated",
     "user-provided",
     "user-approved-rasterization",
 }
