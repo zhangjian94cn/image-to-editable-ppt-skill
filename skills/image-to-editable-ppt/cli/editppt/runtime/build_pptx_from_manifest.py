@@ -1,20 +1,33 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import html
+import importlib.util
 import json
 import math
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import zipfile
+import xml.etree.ElementTree as ET
 from copy import deepcopy
 from pathlib import Path
+
+from pptx_integrity import validate_pptx_integrity
 
 
 EMU_PER_INCH = 914400
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+P_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
+R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
+EP_NS = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
 ASPECT_16_9 = 16 / 9
+ASPECT_16_10 = 16 / 10
+ASPECT_4_3 = 4 / 3
 ASPECT_TOLERANCE = 0.03
 DEFAULT_TEXT_FIT_SAFETY = 0.9
 DEFAULT_TEXT_LINE_HEIGHT = 1.22
@@ -36,6 +49,75 @@ TEXT_VERTICAL_ALIGNMENTS = {
     "ctr": ("ctr", "middle"),
     "b": ("b", "bottom"),
 }
+AUTOFIT_VALUES = {
+    "none": "<a:noAutofit/>",
+    "shrink_text": "<a:normAutofit/>",
+    "resize_shape": "<a:spAutoFit/>",
+    # Backward compatibility for manifests produced before schema v2.
+    "shape": "<a:spAutoFit/>",
+}
+WRAP_VALUES = {"none", "square"}
+DASH_VALUES = {
+    "solid", "dot", "dash", "lgDash", "dashDot", "lgDashDot",
+    "lgDashDotDot", "sysDash", "sysDot", "sysDashDot", "sysDashDotDot",
+}
+PRESET_GEOMETRIES = {
+    "rect", "roundRect", "ellipse", "line", "triangle", "rtTriangle",
+    "parallelogram", "trapezoid", "diamond", "pentagon", "hexagon",
+    "heptagon", "octagon", "decagon", "dodecagon", "pie", "chord",
+    "teardrop", "frame", "halfFrame", "corner", "diagStripe", "plus",
+    "plaque", "can", "cube", "bevel", "donut", "noSmoking", "blockArc",
+    "foldedCorner", "smileyFace", "heart", "lightningBolt", "sun", "moon",
+    "cloud", "arc", "bracketPair", "bracePair", "leftBracket", "rightBracket",
+    "leftBrace", "rightBrace", "rightArrow", "leftArrow", "upArrow",
+    "downArrow", "leftRightArrow", "upDownArrow", "quadArrow", "leftRightUpArrow",
+    "bentArrow", "uturnArrow", "leftUpArrow", "bentUpArrow", "curvedRightArrow",
+    "curvedLeftArrow", "curvedUpArrow", "curvedDownArrow", "stripedRightArrow",
+    "notchedRightArrow", "homePlate", "chevron", "rightArrowCallout",
+    "downArrowCallout", "leftArrowCallout", "upArrowCallout", "leftRightArrowCallout",
+    "quadArrowCallout", "circularArrow", "flowChartProcess", "flowChartDecision",
+    "flowChartInputOutput", "flowChartPredefinedProcess", "flowChartInternalStorage",
+    "flowChartDocument", "flowChartMultidocument", "flowChartTerminator",
+    "flowChartPreparation", "flowChartManualInput", "flowChartManualOperation",
+    "flowChartConnector", "flowChartOffpageConnector", "flowChartPunchedCard",
+    "flowChartPunchedTape", "flowChartSummingJunction", "flowChartOr",
+    "flowChartCollate", "flowChartSort", "flowChartExtract", "flowChartMerge",
+    "flowChartOnlineStorage", "flowChartDelay", "flowChartMagneticTape",
+    "flowChartMagneticDisk", "flowChartMagneticDrum", "flowChartDisplay",
+}
+
+ET.register_namespace("p", P_NS)
+ET.register_namespace("a", "http://schemas.openxmlformats.org/drawingml/2006/main")
+ET.register_namespace("r", R_NS)
+ET.register_namespace("", REL_NS)
+
+
+def powerpoint_base_template():
+    """Return the Microsoft PowerPoint-authored blank package used as the base.
+
+    python-pptx ships a zero-slide template whose package properties identify
+    Microsoft Macintosh PowerPoint as its creator.  Reusing that package keeps
+    the real master, blank layout, theme, view/presentation properties and
+    relationship topology instead of attempting another incomplete skeleton.
+    Deployments may pin an independently accepted template with the environment
+    override; no generated package is allowed to fall back to handwritten OOXML.
+    """
+
+    override = os.environ.get("EDITPPT_POWERPOINT_TEMPLATE", "")
+    if override:
+        candidate = Path(override).expanduser().resolve()
+        if candidate.is_file():
+            return candidate
+        raise ValueError(f"PowerPoint base template does not exist: {candidate}")
+    spec = importlib.util.find_spec("pptx")
+    if spec and spec.submodule_search_locations:
+        candidate = Path(next(iter(spec.submodule_search_locations))) / "templates/default.pptx"
+        if candidate.is_file():
+            return candidate.resolve()
+    raise ValueError(
+        "PowerPoint-authored base template is unavailable; install python-pptx "
+        "or set EDITPPT_POWERPOINT_TEMPLATE"
+    )
 
 
 def emu(value):
@@ -289,15 +371,162 @@ def fit_text_item(item, manifest):
     return item
 
 
+def _require_finite_number(value, field, *, minimum=None, maximum=None):
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be numeric") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{field} must be finite")
+    if minimum is not None and number < minimum:
+        raise ValueError(f"{field} must be >= {minimum}")
+    if maximum is not None and number > maximum:
+        raise ValueError(f"{field} must be <= {maximum}")
+    return number
+
+
+def _validate_hex_color(value, field, *, allow_none=False):
+    if value in (None, ""):
+        return
+    if allow_none and str(value).lower() == "none":
+        return
+    if not re.fullmatch(r"#?[0-9A-Fa-f]{6}", str(value).strip()):
+        raise ValueError(f"{field} must be a six-digit RGB color")
+
+
+def validate_manifest_values(manifest):
+    """Reject values that would serialize into invalid DrawingML."""
+
+    slide = manifest.get("slide", {})
+    _require_finite_number(slide.get("width", 13.333), "slide.width", minimum=0.01)
+    _require_finite_number(slide.get("height", 7.5), "slide.height", minimum=0.01)
+    _validate_hex_color(slide.get("background"), "slide.background")
+    for index, item in enumerate(manifest.get("text_boxes", [])):
+        prefix = f"text_boxes[{index}]"
+        text_alignment(item.get("align", "left"))
+        text_vertical_alignment(item.get("valign", "top"))
+        wrap = str(item.get("wrap") or "none")
+        if wrap not in WRAP_VALUES:
+            raise ValueError(f"{prefix}.wrap must be one of {sorted(WRAP_VALUES)}")
+        autofit = str(item.get("autofit") or "none")
+        if autofit not in AUTOFIT_VALUES:
+            raise ValueError(f"{prefix}.autofit must be one of {sorted(AUTOFIT_VALUES)}")
+        _require_finite_number(item.get("font_size", 18), f"{prefix}.font_size", minimum=0.01)
+        _validate_hex_color(item.get("color", "#111111"), f"{prefix}.color")
+        for field in ("margin_left", "margin_right", "margin_top", "margin_bottom",
+                      "paragraph_spacing_before", "paragraph_spacing_after"):
+            _require_finite_number(item.get(field, 0), f"{prefix}.{field}", minimum=0)
+        _require_finite_number(item.get("line_spacing", 1.0), f"{prefix}.line_spacing", minimum=0.01)
+        _require_finite_number(item.get("character_spacing", 0), f"{prefix}.character_spacing",
+                               minimum=-4000, maximum=4000)
+    for index, item in enumerate(manifest.get("shapes", [])):
+        prefix = f"shapes[{index}]"
+        preset = item.get("preset")
+        if preset and preset not in PRESET_GEOMETRIES:
+            raise ValueError(f"{prefix}.preset is not an allowed DrawingML geometry: {preset}")
+        dash = item.get("dash")
+        if dash and dash not in DASH_VALUES:
+            raise ValueError(f"{prefix}.dash is not an allowed DrawingML dash: {dash}")
+        _validate_hex_color(item.get("fill"), f"{prefix}.fill", allow_none=True)
+        _validate_hex_color(item.get("stroke"), f"{prefix}.stroke", allow_none=True)
+        _require_finite_number(item.get("stroke_width", 1), f"{prefix}.stroke_width", minimum=0)
+    for table_index, table in enumerate(manifest.get("tables", [])):
+        prefix = f"tables[{table_index}]"
+        rows = table.get("cells") or []
+        if not rows or not all(isinstance(row, list) and row for row in rows):
+            raise ValueError(f"{prefix}.cells must be a non-empty rectangular matrix")
+        columns = len(rows[0])
+        if any(len(row) != columns for row in rows):
+            raise ValueError(f"{prefix}.cells must be rectangular")
+        if table.get("columns_px") and len(table["columns_px"]) != columns:
+            raise ValueError(f"{prefix}.columns_px must match the cell column count")
+        if table.get("rows_px") and len(table["rows_px"]) != len(rows):
+            raise ValueError(f"{prefix}.rows_px must match the cell row count")
+        text_alignment(table.get("align", "left"))
+        text_vertical_alignment(table.get("valign", "middle"))
+        _validate_hex_color(table.get("color", "#111111"), f"{prefix}.color")
+        _validate_hex_color(table.get("cell_fill"), f"{prefix}.cell_fill", allow_none=True)
+        _validate_hex_color(table.get("stroke", "#BFBFBF"), f"{prefix}.stroke", allow_none=True)
+        _require_finite_number(table.get("font_size", 12), f"{prefix}.font_size", minimum=0.01)
+        for row_index, row in enumerate(rows):
+            for cell_index, raw in enumerate(row):
+                if not isinstance(raw, dict):
+                    continue
+                cell_prefix = f"{prefix}.cells[{row_index}][{cell_index}]"
+                text_alignment(raw.get("align", table.get("align", "left")))
+                text_vertical_alignment(raw.get("valign", table.get("valign", "middle")))
+                _validate_hex_color(raw.get("color", table.get("color", "#111111")), f"{cell_prefix}.color")
+                _validate_hex_color(raw.get("fill"), f"{cell_prefix}.fill", allow_none=True)
+                _validate_hex_color(raw.get("stroke"), f"{cell_prefix}.stroke", allow_none=True)
+                for field in ("col_span", "row_span"):
+                    _require_finite_number(raw.get(field, 1), f"{cell_prefix}.{field}", minimum=1)
+
+
+def _validate_strict_font(item, label, required):
+    spec = item.get("font_spec")
+    if not isinstance(spec, dict) or required - set(spec):
+        raise ValueError(f"{label} requires an exact manifest-v2 font_spec")
+    if not item.get("font"):
+        raise ValueError(f"{label} requires a builder-facing font name")
+    font_file = Path(str(spec["font_file"])).expanduser()
+    if not font_file.is_absolute() or not font_file.is_file():
+        raise ValueError(f"{label} font_file must be an installed absolute path")
+    digest = hashlib.sha256(font_file.read_bytes()).hexdigest()
+    if digest != spec["file_sha256"]:
+        raise ValueError(f"{label} font file SHA-256 mismatch")
+    item["_strict_font"] = True
+
+
 def normalize_manifest(manifest):
     """Return a manifest copy with pixel authoring fields resolved to inches."""
     normalized = deepcopy(manifest)
+    validate_manifest_values(normalized)
+    strict_fonts = normalized.get("schema_version") == 2
+    if strict_fonts:
+        required = {
+            "east_asian_font", "latin_font", "file_sha256", "internal_name",
+            "font_source", "font_file", "face_index",
+        }
+        for index, item in enumerate(normalized.get("text_boxes", [])):
+            _validate_strict_font(item, f"text_boxes[{index}]", required)
+        for table_index, table in enumerate(normalized.get("tables", [])):
+            _validate_strict_font(table, f"tables[{table_index}]", required)
+            for row_index, row in enumerate(table.get("cells") or []):
+                for cell_index, raw in enumerate(row):
+                    if not isinstance(raw, dict):
+                        raise ValueError(
+                            f"tables[{table_index}].cells[{row_index}][{cell_index}] "
+                            "must be an object in manifest v2"
+                        )
+                    _validate_strict_font(
+                        raw,
+                        f"tables[{table_index}].cells[{row_index}][{cell_index}]",
+                        required,
+                    )
     normalized["text_boxes"] = [
         fit_text_item(normalize_position_item(normalized, item), normalized) for item in normalized.get("text_boxes", [])
     ]
     for key in ("images", "shapes"):
         normalized[key] = [normalize_position_item(normalized, item) for item in normalized.get(key, [])]
+    normalized["tables"] = [
+        normalize_table_item(normalized, item) for item in normalized.get("tables", [])
+    ]
     return normalized
+
+
+def normalize_table_item(manifest, item):
+    item = normalize_position_item(manifest, item)
+    if item.get("columns_px"):
+        item["columns"] = [
+            px_to_inches(manifest, 0, 0, float(value), 0)["width"]
+            for value in item["columns_px"]
+        ]
+    if item.get("rows_px"):
+        item["rows"] = [
+            px_to_inches(manifest, 0, 0, 0, float(value))["height"]
+            for value in item["rows_px"]
+        ]
+    return item
 
 
 def preview_color(value):
@@ -348,38 +577,72 @@ def text_box_xml(idx, item):
     rotation = item.get("rotation")
     rotation_attr = f' rot="{int(float(rotation) * 60000)}"' if rotation not in (None, "") else ""
     font_size = int(float(item.get("font_size", 18)) * 100)
-    font = xml_text(item.get("font", "PingFang SC"))
+    if item.get("_strict_font") and not item.get("font"):
+        raise ValueError(f"strict text box {item.get('id', idx)!r} has no font")
     align = text_alignment(item.get("align", "left"))[0]
     anchor = text_vertical_alignment(item.get("valign", "top"))[0]
-    wrap = item.get("wrap", "none")
-    autofit = item.get("autofit", "none")
-    autofit_xml = "<a:spAutoFit/>" if autofit == "shape" else "<a:noAutofit/>"
+    wrap = str(item.get("wrap") or "none")
+    autofit = str(item.get("autofit") or "none")
+    autofit_xml = AUTOFIT_VALUES[autofit]
+    margins = {
+        "lIns": int(round(float(item.get("margin_left", 0)) * 12700)),
+        "tIns": int(round(float(item.get("margin_top", 0)) * 12700)),
+        "rIns": int(round(float(item.get("margin_right", 0)) * 12700)),
+        "bIns": int(round(float(item.get("margin_bottom", 0)) * 12700)),
+    }
     paragraphs = item.get("paragraphs")
     runs = item.get("runs")
 
     def run_xml(run):
         run_font_size = int(float(run.get("font_size", item.get("font_size", 18))) * 100)
-        run_font = xml_text(run.get("font", item.get("font", "PingFang SC")))
+        spec = run.get("font_spec") or item.get("font_spec") or {}
+        fallback_font = run.get("font") or item.get("font") or (
+            None if item.get("_strict_font") else "PingFang SC"
+        )
+        latin_font_value = spec.get("latin_font") or fallback_font
+        east_asian_font_value = spec.get("east_asian_font") or fallback_font
+        complex_font_value = spec.get("complex_script_font") or latin_font_value
+        if not latin_font_value or not east_asian_font_value:
+            raise ValueError(f"strict text run in {item.get('id', idx)!r} has no font")
+        latin_font = xml_text(latin_font_value)
+        east_asian_font = xml_text(east_asian_font_value)
+        complex_font = xml_text(complex_font_value)
         run_color = hex_color(run.get("color", item.get("color", "#111111")))
         run_bold = ' b="1"' if run.get("bold", item.get("bold")) else ""
         run_italic = ' i="1"' if run.get("italic", item.get("italic")) else ""
+        spacing = run.get("character_spacing", item.get("character_spacing", 0))
+        run_spacing = f' spc="{int(round(float(spacing) * 100))}"' if float(spacing or 0) else ""
         run_baseline = run.get("baseline")
         run_baseline_attr = f' baseline="{int(float(run_baseline))}"' if run_baseline not in (None, "") else ""
         run_text = xml_text(run.get("text", ""))
         return (
-            f'<a:r><a:rPr lang="zh-CN" sz="{run_font_size}"{run_bold}{run_italic}{run_baseline_attr}>'
+            f'<a:r><a:rPr lang="zh-CN" sz="{run_font_size}"{run_bold}{run_italic}{run_spacing}{run_baseline_attr}>'
             f'<a:solidFill><a:srgbClr val="{run_color}"/></a:solidFill>'
-            f'<a:latin typeface="{run_font}"/><a:ea typeface="{run_font}"/><a:cs typeface="{run_font}"/>'
+            f'<a:latin typeface="{latin_font}"/><a:ea typeface="{east_asian_font}"/><a:cs typeface="{complex_font}"/>'
             f'</a:rPr><a:t>{run_text}</a:t></a:r>'
         )
 
     def paragraph_xml(paragraph):
         if isinstance(paragraph, str):
             paragraph_runs = [{"text": paragraph}]
+            paragraph_values = {}
         else:
             paragraph_runs = paragraph.get("runs", [{"text": paragraph.get("text", "")}])
+            paragraph_values = paragraph
+        line_spacing = float(paragraph_values.get("line_spacing", item.get("line_spacing", 1.0)))
+        spacing_before = float(paragraph_values.get(
+            "paragraph_spacing_before", item.get("paragraph_spacing_before", 0)
+        ))
+        spacing_after = float(paragraph_values.get(
+            "paragraph_spacing_after", item.get("paragraph_spacing_after", 0)
+        ))
+        spacing_xml = (
+            f'<a:lnSpc><a:spcPct val="{int(round(line_spacing * 100000))}"/></a:lnSpc>'
+            f'<a:spcBef><a:spcPts val="{int(round(spacing_before * 100))}"/></a:spcBef>'
+            f'<a:spcAft><a:spcPts val="{int(round(spacing_after * 100))}"/></a:spcAft>'
+        )
         return (
-            f'<a:p><a:pPr algn="{align}"/>'
+            f'<a:p><a:pPr algn="{align}">{spacing_xml}</a:pPr>'
             + "".join(run_xml(run) for run in paragraph_runs)
             + f'<a:endParaRPr lang="zh-CN" sz="{font_size}"/></a:p>'
         )
@@ -395,7 +658,7 @@ def text_box_xml(idx, item):
         <p:nvSpPr><p:cNvPr id="{idx}" name="TextBox {idx}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>
         <p:spPr><a:xfrm{rotation_attr}><a:off x="{left}" y="{top}"/><a:ext cx="{width}" cy="{height}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></p:spPr>
         <p:txBody>
-          <a:bodyPr wrap="{xml_text(wrap)}" anchor="{anchor}" lIns="0" tIns="0" rIns="0" bIns="0">{autofit_xml}</a:bodyPr><a:lstStyle/>
+          <a:bodyPr wrap="{xml_text(wrap)}" anchor="{anchor}" lIns="{margins['lIns']}" tIns="{margins['tIns']}" rIns="{margins['rIns']}" bIns="{margins['bIns']}">{autofit_xml}</a:bodyPr><a:lstStyle/>
           {text_body}
         </p:txBody>
       </p:sp>"""
@@ -413,6 +676,106 @@ def image_xml(idx, rel_id, item):
         <p:blipFill><a:blip r:embed="{rel_id}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>
         <p:spPr><a:xfrm><a:off x="{left}" y="{top}"/><a:ext cx="{width}" cy="{height}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
       </p:pic>"""
+
+
+def table_cell_xml(cell, table):
+    """Serialize one editable native table cell without a font fallback."""
+
+    if cell.get("h_merge") or cell.get("v_merge"):
+        merge = ' hMerge="1"' if cell.get("h_merge") else ' vMerge="1"'
+        return (
+            f'<a:tc{merge}><a:txBody><a:bodyPr/><a:lstStyle/><a:p/></a:txBody>'
+            '<a:tcPr/></a:tc>'
+        )
+    span = ""
+    if int(cell.get("col_span", 1) or 1) > 1:
+        span += f' gridSpan="{int(cell["col_span"])}"'
+    if int(cell.get("row_span", 1) or 1) > 1:
+        span += f' rowSpan="{int(cell["row_span"])}"'
+
+    size = int(float(cell.get("font_size", table.get("font_size", 12))) * 100)
+    spec = cell.get("font_spec") or table.get("font_spec") or {}
+    fallback = cell.get("font") or table.get("font")
+    if not fallback and not (cell.get("_strict_font") or table.get("_strict_font")):
+        fallback = "PingFang SC"
+    latin = spec.get("latin_font") or fallback
+    east_asian = spec.get("east_asian_font") or fallback
+    complex_script = spec.get("complex_script_font") or latin
+    if not latin or not east_asian:
+        raise ValueError("strict table cell is missing exact Latin or East Asian font names")
+    color = hex_color(cell.get("color", table.get("color", "#111111")))
+    bold = ' b="1"' if cell.get("bold", table.get("bold")) else ""
+    italic = ' i="1"' if cell.get("italic", table.get("italic")) else ""
+    spacing = float(cell.get("character_spacing", table.get("character_spacing", 0)) or 0)
+    spacing_attr = f' spc="{int(round(spacing * 100))}"' if spacing else ""
+    align = text_alignment(cell.get("align", table.get("align", "left")))[0]
+    anchor = text_vertical_alignment(cell.get("valign", table.get("valign", "middle")))[0]
+    paragraphs = "".join(
+        f'<a:p><a:pPr algn="{align}"/><a:r>'
+        f'<a:rPr lang="zh-CN" sz="{size}"{bold}{italic}{spacing_attr}>'
+        f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
+        f'<a:latin typeface="{xml_text(latin)}"/>'
+        f'<a:ea typeface="{xml_text(east_asian)}"/>'
+        f'<a:cs typeface="{xml_text(complex_script)}"/>'
+        f'</a:rPr><a:t>{xml_text(line)}</a:t></a:r></a:p>'
+        for line in str(cell.get("text", "")).split("\n")
+    ) or "<a:p/>"
+    fill = cell.get("fill", table.get("cell_fill"))
+    fill_xml = shape_fill(fill) if fill else "<a:noFill/>"
+    stroke = cell.get("stroke", table.get("stroke", "#BFBFBF"))
+    stroke_width = float(cell.get("stroke_width", table.get("stroke_width", 0.75)) or 0.75)
+    if not stroke or stroke == "none":
+        line_xml = ""
+    else:
+        pen = f'<a:solidFill><a:srgbClr val="{hex_color(stroke)}"/></a:solidFill>'
+        edge = f'w="{int(stroke_width * 12700)}" cap="flat" cmpd="sng"'
+        line_xml = "".join(
+            f'<a:ln{side} {edge}>{pen}</a:ln{side}>' for side in ("L", "R", "T", "B")
+        )
+    margins = {
+        "marL": int(float(cell.get("margin_left", table.get("margin_left", 3.6))) * 12700),
+        "marR": int(float(cell.get("margin_right", table.get("margin_right", 3.6))) * 12700),
+        "marT": int(float(cell.get("margin_top", table.get("margin_top", 2.16))) * 12700),
+        "marB": int(float(cell.get("margin_bottom", table.get("margin_bottom", 2.16))) * 12700),
+    }
+    return (
+        f'<a:tc{span}><a:txBody><a:bodyPr/><a:lstStyle/>{paragraphs}</a:txBody>'
+        f'<a:tcPr marL="{margins["marL"]}" marR="{margins["marR"]}" '
+        f'marT="{margins["marT"]}" marB="{margins["marB"]}" anchor="{anchor}">'
+        f'{line_xml}{fill_xml}</a:tcPr></a:tc>'
+    )
+
+
+def table_xml(idx, item):
+    left, top = emu(item.get("left", 0)), emu(item.get("top", 0))
+    width, height = emu(item.get("width", 1)), emu(item.get("height", 1))
+    rows = item.get("cells") or []
+    column_count = max((len(row) for row in rows), default=0)
+    if not rows or not column_count:
+        raise ValueError(f"table {item.get('id', idx)!r} has no cells")
+    columns = item.get("columns") or [item.get("width", 1) / column_count] * column_count
+    heights = item.get("rows") or [item.get("height", 1) / len(rows)] * len(rows)
+    grid = "".join(f'<a:gridCol w="{emu(value)}"/>' for value in columns)
+    body = "".join(
+        f'<a:tr h="{emu(row_height)}">'
+        + "".join(
+            table_cell_xml(cell if isinstance(cell, dict) else {"text": cell}, item)
+            for cell in row
+        )
+        + "</a:tr>"
+        for row, row_height in zip(rows, heights)
+    )
+    first_row = ' firstRow="1"' if item.get("header", True) else ""
+    return f"""
+      <p:graphicFrame>
+        <p:nvGraphicFramePr><p:cNvPr id="{idx}" name="Table {idx}"/>
+          <p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr><p:nvPr/>
+        </p:nvGraphicFramePr>
+        <p:xfrm><a:off x="{left}" y="{top}"/><a:ext cx="{width}" cy="{height}"/></p:xfrm>
+        <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">
+          <a:tbl><a:tblPr{first_row}/><a:tblGrid>{grid}</a:tblGrid>{body}</a:tbl>
+        </a:graphicData></a:graphic>
+      </p:graphicFrame>"""
 
 
 def shape_xml(idx, item):
@@ -510,6 +873,8 @@ def slide_xml(manifest):
         layered.append((float(item.get("z_index", 100)), index, "shape", item, None))
     for rel_index, item in enumerate(manifest.get("images", []), start=1):
         layered.append((float(item.get("z_index", 200)), rel_index, "image", item, f"rId{rel_index + 1}"))
+    for index, item in enumerate(manifest.get("tables", [])):
+        layered.append((float(item.get("z_index", 250)), index, "table", item, None))
     for index, item in enumerate(manifest.get("text_boxes", [])):
         layered.append((float(item.get("z_index", 300)), index, "text", item, None))
 
@@ -518,6 +883,8 @@ def slide_xml(manifest):
             parts.append(shape_xml(next_id, item))
         elif kind == "image":
             parts.append(image_xml(next_id, rel_id, item))
+        elif kind == "table":
+            parts.append(table_xml(next_id, item))
         else:
             parts.append(text_box_xml(next_id, item))
         next_id += 1
@@ -535,8 +902,8 @@ def slide_xml(manifest):
 </p:sld>"""
 
 
-def rels_xml(manifest, media_start=1, notes_index=None):
-    rels = ['<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>']
+def rels_xml(manifest, media_start=1, notes_index=None, layout_target="slideLayout7.xml"):
+    rels = [f'<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/{layout_target}"/>']
     for i, item in enumerate(manifest.get("images", []), start=1):
         target = f"../media/image{media_start + i - 1}{image_ext(item['path'])}"
         rels.append(f'<Relationship Id="rId{i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="{target}"/>')
@@ -580,7 +947,7 @@ def notes_rels_xml(slide_index):
 def notes_master_xml():
     return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:notesMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
-  <p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld>
+  <p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld>
   <p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
 </p:notesMaster>"""
 
@@ -625,17 +992,26 @@ def is_wide_slide(width, height):
 
 
 def slide_size_type(width, height):
-    return "wide" if is_wide_slide(width, height) else "custom"
+    aspect = float(width) / float(height)
+    for expected, value in (
+        (ASPECT_16_9, "screen16x9"),
+        (ASPECT_16_10, "screen16x10"),
+        (ASPECT_4_3, "screen4x3"),
+    ):
+        if abs(aspect / expected - 1) <= ASPECT_TOLERANCE:
+            return value
+    return None
 
 
 def presentation_xml(slide_count, width, height):
     slide_ids = "".join(f'<p:sldId id="{255 + i}" r:id="rId{i + 1}"/>' for i in range(1, slide_count + 1))
     size_type = slide_size_type(width, height)
+    size_type_attr = f' type="{size_type}"' if size_type else ""
     return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>
   <p:sldIdLst>{slide_ids}</p:sldIdLst>
-  <p:sldSz cx="{width}" cy="{height}" type="{size_type}"/>
+  <p:sldSz cx="{width}" cy="{height}"{size_type_attr}/>
   <p:notesSz cx="6858000" cy="9144000"/>
 </p:presentation>"""
 
@@ -647,24 +1023,234 @@ def presentation_rels_xml(slide_count):
     return f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="{REL_NS}">{"".join(rels)}</Relationships>'
 
 
+def theme_xml():
+    """Return a minimal theme that PowerPoint accepts without repairing.
+
+    DrawingML requires the format scheme's fill, line, effect, and background
+    style lists to contain three entries.  The former one-entry lists were
+    readable by zip/XML tooling but PowerPoint repaired every generated deck.
+    Runs still carry explicit typefaces and colors; these entries are complete
+    structural defaults, not a font-substitution path.
+    """
+    fills = "".join(
+        '<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>'
+        for _ in range(3)
+    )
+    lines = "".join(
+        f'<a:ln w="{width}" cap="flat" cmpd="sng" algn="ctr">'
+        '<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>'
+        '<a:prstDash val="solid"/><a:miter lim="800000"/></a:ln>'
+        for width in (6350, 12700, 19050)
+    )
+    effects = "".join('<a:effectStyle><a:effectLst/></a:effectStyle>' for _ in range(3))
+    return f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="ImageToEditablePPT">
+  <a:themeElements>
+    <a:clrScheme name="Office">
+      <a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>
+      <a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>
+      <a:dk2><a:srgbClr val="1F1F1F"/></a:dk2>
+      <a:lt2><a:srgbClr val="F8F8F8"/></a:lt2>
+      <a:accent1><a:srgbClr val="0F766E"/></a:accent1>
+      <a:accent2><a:srgbClr val="E66B00"/></a:accent2>
+      <a:accent3><a:srgbClr val="F6D365"/></a:accent3>
+      <a:accent4><a:srgbClr val="57C4B8"/></a:accent4>
+      <a:accent5><a:srgbClr val="666666"/></a:accent5>
+      <a:accent6><a:srgbClr val="111111"/></a:accent6>
+      <a:hlink><a:srgbClr val="0563C1"/></a:hlink>
+      <a:folHlink><a:srgbClr val="954F72"/></a:folHlink>
+    </a:clrScheme>
+    <a:fontScheme name="PingFang">
+      <a:majorFont><a:latin typeface="PingFang SC"/><a:ea typeface="PingFang SC"/><a:cs typeface="PingFang SC"/></a:majorFont>
+      <a:minorFont><a:latin typeface="PingFang SC"/><a:ea typeface="PingFang SC"/><a:cs typeface="PingFang SC"/></a:minorFont>
+    </a:fontScheme>
+    <a:fmtScheme name="Office">
+      <a:fillStyleLst>{fills}</a:fillStyleLst>
+      <a:lnStyleLst>{lines}</a:lnStyleLst>
+      <a:effectStyleLst>{effects}</a:effectStyleLst>
+      <a:bgFillStyleLst>{fills}</a:bgFillStyleLst>
+    </a:fmtScheme>
+  </a:themeElements>
+</a:theme>'''
+
+
 def write_common_parts(z, slide_count, width, height, notes_count):
-    presentation_format = "Widescreen" if slide_size_type(width, height) == "wide" else "Custom"
+    size_type = slide_size_type(width, height)
+    presentation_format = {
+        "screen16x9": "Widescreen",
+        "screen16x10": "Screen 16:10",
+        "screen4x3": "On-screen Show (4:3)",
+    }.get(size_type, "Custom")
     z.writestr("_rels/.rels", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>""")
     z.writestr("docProps/core.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Image to editable PPT</dc:title></cp:coreProperties>""")
     z.writestr("docProps/app.xml", f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Codex</Application><PresentationFormat>{presentation_format}</PresentationFormat><Slides>{slide_count}</Slides></Properties>""")
     z.writestr("ppt/presentation.xml", presentation_xml(slide_count, width, height))
     z.writestr("ppt/_rels/presentation.xml.rels", presentation_rels_xml(slide_count))
-    z.writestr("ppt/slideMasters/slideMaster1.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst></p:sldMaster>""")
+    z.writestr("ppt/slideMasters/slideMaster1.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst></p:sldMaster>""")
     z.writestr("ppt/slideMasters/_rels/slideMaster1.xml.rels", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/></Relationships>""")
-    z.writestr("ppt/slideLayouts/slideLayout1.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" type="blank" preserve="1"><p:cSld name="Blank"><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>""")
+    z.writestr("ppt/slideLayouts/slideLayout1.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" type="blank" preserve="1"><p:cSld name="Blank"><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>""")
     z.writestr("ppt/slideLayouts/_rels/slideLayout1.xml.rels", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/></Relationships>""")
-    z.writestr("ppt/theme/theme1.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="ImageToEditablePPT"><a:themeElements><a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="1F1F1F"/></a:dk2><a:lt2><a:srgbClr val="F8F8F8"/></a:lt2><a:accent1><a:srgbClr val="0F766E"/></a:accent1><a:accent2><a:srgbClr val="E66B00"/></a:accent2><a:accent3><a:srgbClr val="F6D365"/></a:accent3><a:accent4><a:srgbClr val="57C4B8"/></a:accent4><a:accent5><a:srgbClr val="666666"/></a:accent5><a:accent6><a:srgbClr val="111111"/></a:accent6><a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink></a:clrScheme><a:fontScheme name="PingFang"><a:majorFont><a:latin typeface="PingFang SC"/><a:ea typeface="PingFang SC"/><a:cs typeface="PingFang SC"/></a:majorFont><a:minorFont><a:latin typeface="PingFang SC"/><a:ea typeface="PingFang SC"/><a:cs typeface="PingFang SC"/></a:minorFont></a:fontScheme><a:fmtScheme name="Office"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln w="9525"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>""")
+    z.writestr("ppt/theme/theme1.xml", theme_xml())
     if notes_count:
         z.writestr("ppt/notesMasters/notesMaster1.xml", notes_master_xml())
         z.writestr("ppt/notesMasters/_rels/notesMaster1.xml.rels", notes_master_rels_xml())
 
 
-def write_pptx(manifest, out_path, manifest_path):
+def _template_content_types(template_bytes, manifests, notes_indices):
+    root = ET.fromstring(template_bytes)
+    existing_defaults = {
+        node.get("Extension") for node in root.findall(f"{{{CT_NS}}}Default")
+    }
+    existing_overrides = {
+        node.get("PartName") for node in root.findall(f"{{{CT_NS}}}Override")
+    }
+    for manifest in manifests:
+        for item in manifest.get("images", []):
+            extension = image_ext(item["path"]).lstrip(".")
+            if extension not in existing_defaults:
+                ET.SubElement(root, f"{{{CT_NS}}}Default", {
+                    "Extension": extension,
+                    "ContentType": content_type_for(item["path"]),
+                })
+                existing_defaults.add(extension)
+    for index in range(1, len(manifests) + 1):
+        part = f"/ppt/slides/slide{index}.xml"
+        if part not in existing_overrides:
+            ET.SubElement(root, f"{{{CT_NS}}}Override", {
+                "PartName": part,
+                "ContentType": "application/vnd.openxmlformats-officedocument.presentationml.slide+xml",
+            })
+    if notes_indices:
+        master = "/ppt/notesMasters/notesMaster1.xml"
+        if master not in existing_overrides:
+            ET.SubElement(root, f"{{{CT_NS}}}Override", {
+                "PartName": master,
+                "ContentType": "application/vnd.openxmlformats-officedocument.presentationml.notesMaster+xml",
+            })
+        for index in notes_indices:
+            part = f"/ppt/notesSlides/notesSlide{index}.xml"
+            if part not in existing_overrides:
+                ET.SubElement(root, f"{{{CT_NS}}}Override", {
+                    "PartName": part,
+                    "ContentType": "application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml",
+                })
+    # OPC readers require `Types` itself to carry the default content-types
+    # namespace.  A generic `ns0:Types` serialization is XML-equivalent but is
+    # rejected by Packaging APIs before the Open XML schema is even reached.
+    ET.register_namespace("", CT_NS)
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _template_presentation_parts(presentation_bytes, rels_bytes, slide_count, width, height, notes_count):
+    rels_root = ET.fromstring(rels_bytes)
+    used_ids = {
+        int(match.group(1))
+        for node in list(rels_root)
+        if (match := re.fullmatch(r"rId(\d+)", str(node.get("Id") or "")))
+    }
+    next_rid = max(used_ids or {0}) + 1
+    slide_rids = []
+    for index in range(1, slide_count + 1):
+        rid = f"rId{next_rid}"
+        next_rid += 1
+        slide_rids.append(rid)
+        ET.SubElement(rels_root, f"{{{REL_NS}}}Relationship", {
+            "Id": rid,
+            "Type": f"{R_NS}/slide",
+            "Target": f"slides/slide{index}.xml",
+        })
+    if notes_count:
+        ET.SubElement(rels_root, f"{{{REL_NS}}}Relationship", {
+            "Id": f"rId{next_rid}",
+            "Type": f"{R_NS}/notesMaster",
+            "Target": "notesMasters/notesMaster1.xml",
+        })
+
+    root = ET.fromstring(presentation_bytes)
+    old_list = root.find(f"{{{P_NS}}}sldIdLst")
+    if old_list is not None:
+        root.remove(old_list)
+    slide_list = ET.Element(f"{{{P_NS}}}sldIdLst")
+    for index, rid in enumerate(slide_rids, start=256):
+        ET.SubElement(slide_list, f"{{{P_NS}}}sldId", {
+            "id": str(index), f"{{{R_NS}}}id": rid,
+        })
+    master_list = root.find(f"{{{P_NS}}}sldMasterIdLst")
+    root.insert(list(root).index(master_list) + 1 if master_list is not None else 0, slide_list)
+    size = root.find(f"{{{P_NS}}}sldSz")
+    if size is None:
+        size = ET.SubElement(root, f"{{{P_NS}}}sldSz")
+    size.set("cx", str(width))
+    size.set("cy", str(height))
+    size_type = slide_size_type(width, height)
+    if size_type:
+        size.set("type", size_type)
+    else:
+        size.attrib.pop("type", None)
+    presentation_xml_bytes = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    ET.register_namespace("", REL_NS)
+    rels_xml_bytes = ET.tostring(rels_root, encoding="utf-8", xml_declaration=True)
+    return presentation_xml_bytes, rels_xml_bytes
+
+
+def _template_app_properties(app_bytes, slide_count, notes_count, width, height):
+    root = ET.fromstring(app_bytes)
+    values = {
+        "Application": "Microsoft Macintosh PowerPoint",
+        "PresentationFormat": {
+            "screen16x9": "Widescreen",
+            "screen16x10": "Screen 16:10",
+            "screen4x3": "On-screen Show (4:3)",
+        }.get(slide_size_type(width, height), "Custom"),
+        "Slides": str(slide_count),
+        "Notes": str(notes_count),
+    }
+    for name, value in values.items():
+        node = root.find(f"{{{EP_NS}}}{name}")
+        if node is not None:
+            node.text = value
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def write_template_parts(z, manifests, width, height, notes_indices):
+    template = powerpoint_base_template()
+    skip = {
+        "[Content_Types].xml", "ppt/presentation.xml",
+        "ppt/_rels/presentation.xml.rels", "docProps/app.xml",
+    }
+    with zipfile.ZipFile(template) as source:
+        names = set(source.namelist())
+        required = {
+            "[Content_Types].xml", "ppt/presentation.xml",
+            "ppt/_rels/presentation.xml.rels", "docProps/app.xml",
+            "ppt/slideLayouts/slideLayout7.xml",
+        }
+        missing = sorted(required - names)
+        if missing:
+            raise ValueError(f"PowerPoint base template is missing required parts: {missing}")
+        for name in source.namelist():
+            if name not in skip:
+                z.writestr(name, source.read(name))
+        presentation, rels = _template_presentation_parts(
+            source.read("ppt/presentation.xml"),
+            source.read("ppt/_rels/presentation.xml.rels"),
+            len(manifests), width, height, len(notes_indices),
+        )
+        z.writestr("[Content_Types].xml", _template_content_types(
+            source.read("[Content_Types].xml"), manifests, notes_indices
+        ))
+        z.writestr("ppt/presentation.xml", presentation)
+        z.writestr("ppt/_rels/presentation.xml.rels", rels)
+        z.writestr("docProps/app.xml", _template_app_properties(
+            source.read("docProps/app.xml"), len(manifests), len(notes_indices), width, height
+        ))
+    if notes_indices:
+        z.writestr("ppt/notesMasters/notesMaster1.xml", notes_master_xml())
+        z.writestr("ppt/notesMasters/_rels/notesMaster1.xml.rels", notes_master_rels_xml())
+    return template
+
+
+def write_pptx(manifest, out_path, manifest_path, *, integrity_report_path=None, build_id=None):
     width = emu(manifest.get("slide", {}).get("width", 13.333))
     height = emu(manifest.get("slide", {}).get("height", 7.5))
     out = Path(out_path)
@@ -672,8 +1258,7 @@ def write_pptx(manifest, out_path, manifest_path):
     normalized = normalize_manifest(manifest)
     media_index = 1
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("[Content_Types].xml", content_types_xml([normalized], []))
-        write_common_parts(z, 1, width, height, 0)
+        template = write_template_parts(z, [normalized], width, height, [])
         z.writestr("ppt/slides/slide1.xml", slide_xml(normalized))
         z.writestr("ppt/slides/_rels/slide1.xml.rels", rels_xml(normalized, media_index, None))
         base = Path(manifest_path).resolve().parent
@@ -683,6 +1268,13 @@ def write_pptx(manifest, out_path, manifest_path):
                 src = base / src
             z.write(src, f"ppt/media/image{media_index}{image_ext(src)}")
             media_index += 1
+    validate_pptx_integrity(
+        out,
+        report_path=Path(integrity_report_path) if integrity_report_path else out.parent / "pptx-integrity-report.json",
+        source_kind="generated",
+        build_id=build_id,
+        template_path=template,
+    )
 
 
 def deck_slide_size(deck, page_entries):
@@ -692,7 +1284,7 @@ def deck_slide_size(deck, page_entries):
     return emu(slide.get("width", 13.333)), emu(slide.get("height", 7.5))
 
 
-def write_deck(deck, page_entries, out_path, notes_entries):
+def write_deck(deck, page_entries, out_path, notes_entries, *, integrity_report_path=None, build_id=None):
     if not page_entries:
         raise ValueError("Deck has no pages")
     width, height = deck_slide_size(deck, page_entries)
@@ -704,8 +1296,7 @@ def write_deck(deck, page_entries, out_path, notes_entries):
     manifests = [entry["manifest"] for entry in normalized_entries]
     media_index = 1
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("[Content_Types].xml", content_types_xml(manifests, notes_indices))
-        write_common_parts(z, len(page_entries), width, height, len(notes_by_page))
+        template = write_template_parts(z, manifests, width, height, notes_indices)
         for slide_index, entry in enumerate(normalized_entries, start=1):
             manifest = entry["manifest"]
             notes_index = slide_index if slide_index in notes_by_page else None
@@ -726,6 +1317,13 @@ def write_deck(deck, page_entries, out_path, notes_entries):
                 else:
                     z.writestr(f"ppt/notesSlides/notesSlide{notes_index}.xml", notes_slide_xml(note.get("text", "")))
                 z.writestr(f"ppt/notesSlides/_rels/notesSlide{notes_index}.xml.rels", notes_rels_xml(slide_index))
+    validate_pptx_integrity(
+        out,
+        report_path=Path(integrity_report_path) if integrity_report_path else out.parent / "pptx-integrity-report.json",
+        source_kind="generated",
+        build_id=build_id,
+        template_path=template,
+    )
 
 
 def page_entries_from_deck_manifest(deck_manifest_path):
@@ -923,17 +1521,73 @@ def render_preview(manifest, manifest_path, out_path):
             return
         draw_content(draw, box_x, box_y)
 
+    def render_table(item):
+        rows = item.get("cells") or []
+        if not rows:
+            return
+        column_count = len(rows[0])
+        columns = item.get("columns") or [item.get("width", 1) / column_count] * column_count
+        heights = item.get("rows") or [item.get("height", 1) / len(rows)] * len(rows)
+        lefts, tops = [], []
+        running = float(item.get("left", 0))
+        for value in columns:
+            lefts.append(running)
+            running += value
+        running = float(item.get("top", 0))
+        for value in heights:
+            tops.append(running)
+            running += value
+        for row_index, row in enumerate(rows):
+            for column_index, raw in enumerate(row):
+                cell = raw if isinstance(raw, dict) else {"text": raw}
+                if cell.get("h_merge") or cell.get("v_merge"):
+                    continue
+                col_span = max(1, int(cell.get("col_span", 1) or 1))
+                row_span = max(1, int(cell.get("row_span", 1) or 1))
+                x0, y0 = lefts[column_index] * scale, tops[row_index] * scale
+                x1 = (lefts[column_index] + sum(columns[column_index:column_index + col_span])) * scale
+                y1 = (tops[row_index] + sum(heights[row_index:row_index + row_span])) * scale
+                fill = preview_color(cell.get("fill", item.get("cell_fill")))
+                stroke = preview_color(cell.get("stroke", item.get("stroke", "#BFBFBF")))
+                draw.rectangle(
+                    [x0, y0, x1, y1],
+                    fill=None if fill in (None, "none") else fill,
+                    outline=None if stroke in (None, "none") else stroke,
+                    width=max(1, int(float(cell.get("stroke_width", item.get("stroke_width", 0.75))))),
+                )
+                value = str(cell.get("text", ""))
+                if not value:
+                    continue
+                size = max(1, int(float(cell.get("font_size", item.get("font_size", 12))) * scale / 72))
+                font_path = choose_preview_font(
+                    cell.get("preview_font") or item.get("preview_font")
+                    or (cell.get("font_spec") or {}).get("font_file")
+                    or (item.get("font_spec") or {}).get("font_file")
+                )
+                try:
+                    font = ImageFont.truetype(font_path, size) if font_path else ImageFont.load_default()
+                except OSError:
+                    font = ImageFont.load_default()
+                color = preview_color(cell.get("color", item.get("color", "#111111")))
+                padding = max(2, int(size * 0.3))
+                draw.multiline_text((x0 + padding, y0 + padding), value, font=font, fill=color, spacing=2)
+
     layered = []
     for index, item in enumerate(manifest.get("shapes", [])):
         layered.append((float(item.get("z_index", 100)), index, render_shape, item))
     for index, item in enumerate(manifest.get("images", [])):
         layered.append((float(item.get("z_index", 200)), index, render_image, item))
+    for index, item in enumerate(manifest.get("tables", [])):
+        layered.append((float(item.get("z_index", 250)), index, render_table, item))
     for index, item in enumerate(manifest.get("text_boxes", [])):
         layered.append((float(item.get("z_index", 300)), index, render_text, item))
     for _z_index, _order, renderer, item in sorted(layered, key=lambda entry: (entry[0], entry[1])):
         renderer(item)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     canvas.save(out_path)
+    output = Path(out_path)
+    if output.name == "preview.png":
+        shutil.copy2(output, output.with_name("quick-preview.png"))
 
 
 def choose_preview_font(preferred):
@@ -978,11 +1632,20 @@ def main():
     parser.add_argument("--deck-manifest")
     parser.add_argument("--out")
     parser.add_argument("--preview")
+    parser.add_argument("--integrity-report")
+    parser.add_argument("--build-id")
     args = parser.parse_args()
     if args.deck_manifest:
         deck, entries, notes_entries = page_entries_from_deck_manifest(args.deck_manifest)
         out = Path(args.out) if args.out else output_path_from_deck_manifest(args.deck_manifest)
-        write_deck(deck, entries, out, notes_entries)
+        write_deck(
+            deck,
+            entries,
+            out,
+            notes_entries,
+            integrity_report_path=args.integrity_report,
+            build_id=args.build_id,
+        )
         print(f"Wrote {out}")
         return
     if not args.manifest:
@@ -990,7 +1653,13 @@ def main():
     if not args.out:
         parser.error("--out is required unless --deck-manifest provides an output")
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
-    write_pptx(manifest, args.out, args.manifest)
+    write_pptx(
+        manifest,
+        args.out,
+        args.manifest,
+        integrity_report_path=args.integrity_report,
+        build_id=args.build_id,
+    )
     if args.preview:
         render_preview(manifest, args.manifest, args.preview)
     print(f"Wrote {args.out}")

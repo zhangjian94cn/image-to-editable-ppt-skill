@@ -21,6 +21,14 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "6.0.x"
+
+      - name: Build locked Open XML validator
+        run: |
+          bash skills/image-to-editable-ppt/tools/openxml-validator/build.sh
+
       - name: Install CLI package
         run: |
           python -m pip install --upgrade pip
