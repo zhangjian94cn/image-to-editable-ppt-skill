@@ -93,11 +93,11 @@ def save_image_page(src, page_dir):
 
 
 def render_pdf_pages(pdf_path, pages_dir, dpi):
-    import fitz
+    import pymupdf
 
-    doc = fitz.open(pdf_path)
+    doc = pymupdf.open(pdf_path)
     outputs = []
-    matrix = fitz.Matrix(dpi / 72, dpi / 72)
+    matrix = pymupdf.Matrix(dpi / 72, dpi / 72)
     for index, page in enumerate(doc, start=1):
         page_dir = pages_dir / f"page_{index:03d}"
         page_dir.mkdir(parents=True, exist_ok=True)

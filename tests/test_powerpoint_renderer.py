@@ -4,7 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import fitz
+import pymupdf
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,7 +14,7 @@ import powerpoint_render as renderer  # noqa: E402
 
 
 def _one_page_pdf(path: Path) -> None:
-    document = fitz.open()
+    document = pymupdf.open()
     document.new_page(width=960, height=540)
     document.save(path)
     document.close()

@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-import fitz
+import pymupdf
 
 
 POWERPOINT_APP = Path("/Applications/Microsoft PowerPoint.app")
@@ -196,17 +196,19 @@ def _valid_pdf(path: Path, expected_slides: int) -> bool:
     if not path.is_file() or path.stat().st_size < 8 or path.read_bytes()[:5] != b"%PDF-":
         return False
     try:
-        with fitz.open(path) as document:
+        with pymupdf.open(path) as document:
             return document.page_count == expected_slides
     except (OSError, RuntimeError, ValueError):
         return False
 
 
 def _render_pdf_page(pdf: Path, output_png: Path, dpi: int) -> None:
-    with fitz.open(pdf) as document:
+    with pymupdf.open(pdf) as document:
         if document.page_count != 1:
             raise PowerPointRenderError(f"page renderer requires exactly one slide, found {document.page_count}")
-        pixmap = document[0].get_pixmap(matrix=fitz.Matrix(dpi / 72.0, dpi / 72.0), alpha=False)
+        pixmap = document[0].get_pixmap(
+            matrix=pymupdf.Matrix(dpi / 72.0, dpi / 72.0), alpha=False
+        )
         output_png.parent.mkdir(parents=True, exist_ok=True)
         pixmap.save(output_png)
 
