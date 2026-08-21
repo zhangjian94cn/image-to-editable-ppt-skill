@@ -9,12 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import plistlib
-import shutil
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -23,14 +19,9 @@ from PIL import Image, ImageChops
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
+from powerpoint_render import render_one_page
 
-DEFAULT_EXTRACTORS = (
-    Path.home()
-    / "Documents/code/zhangjian-skills/skills/my/document-parsing/workflows/"
-    "ppt-content-extractor/scripts/extract_ppt.py",
-    Path.home()
-    / ".codex/skills/document-parsing/workflows/ppt-content-extractor/scripts/extract_ppt.py",
-)
+
 POWERPOINT_APP = Path("/Applications/Microsoft PowerPoint.app")
 
 
@@ -59,14 +50,10 @@ def powerpoint_version() -> str:
 
 
 def find_extractor(explicit: str = "") -> Path | None:
-    candidates: list[Path] = []
-    if explicit:
-        candidates.append(Path(explicit).expanduser())
-    configured = os.environ.get("EDITPPT_POWERPOINT_EXTRACTOR", "").strip()
-    if configured:
-        candidates.append(Path(configured).expanduser())
-    candidates.extend(DEFAULT_EXTRACTORS)
-    return next((value.resolve() for value in candidates if value.is_file()), None)
+    """Return the Skill-owned target-only renderer for compatibility callers."""
+
+    renderer = Path(__file__).with_name("powerpoint_render.py")
+    return renderer.resolve() if renderer.is_file() else None
 
 
 def render_powerpoint(
@@ -89,65 +76,30 @@ def render_powerpoint(
         raise RuntimeError("Microsoft PowerPoint for macOS is unavailable")
     renderer = find_extractor(extractor)
     if renderer is None:
-        raise RuntimeError(
-            "authoritative PowerPoint extractor unavailable; set EDITPPT_POWERPOINT_EXTRACTOR"
-        )
+        raise RuntimeError("Skill-owned PowerPoint renderer is unavailable")
     candidate_sha = sha256(pptx_path)
-    command = [
-        sys.executable,
-        str(renderer),
-        "--input",
-        str(pptx_path),
-        "--output",
-        str(evidence_dir),
-        "--screenshots-only",
-        "--require-renderer",
-        "powerpoint",
-        "--slides",
-        "1",
-        "--screenshot-dpi",
-        str(dpi),
-        "--build-id",
-        f"editppt-{candidate_sha[:16]}",
-        "--json",
-    ]
-    completed = subprocess.run(command, capture_output=True, text=True, check=False)
-    report_path = evidence_dir / "screenshot-report.json"
-    try:
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        try:
-            report = json.loads(completed.stdout or "{}")
-        except json.JSONDecodeError:
-            report = {}
-    if not isinstance(report, dict):
-        report = {}
-    files = report.get("files") if isinstance(report.get("files"), list) else []
-    rendered = evidence_dir / str(files[0]) if files else None
-    if (
-        completed.returncode != 0
-        or report.get("success") is not True
-        or report.get("authoritative") is not True
-        or rendered is None
-        or not rendered.is_file()
-    ):
-        error = str(report.get("error") or completed.stderr.strip() or "PowerPoint render failed")
-        raise RuntimeError(error)
-    output_png.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(rendered, output_png)
+    report = render_one_page(
+        pptx_path,
+        output_png,
+        evidence_dir=evidence_dir,
+        dpi=dpi,
+    )
+    report_path = evidence_dir / "powerpoint-render.json"
     output_sha = sha256(output_png)
     bound = {
         "status": "rendered",
         "authoritative": True,
         "renderer": "microsoft-powerpoint",
-        "renderer_version": report.get("renderer_version") or powerpoint_version(),
+        "renderer_version": powerpoint_version(),
         "input_pptx": str(pptx_path),
         "input_sha256": candidate_sha,
         "output_png": str(output_png),
         "output_sha256": output_sha,
         "dpi": dpi,
-        "extractor": str(renderer),
-        "upstream_report": str(report_path),
+        "renderer_script": str(renderer),
+        "renderer_report": str(report_path),
+        "target_only": True,
+        "canary_created": False,
     }
     write_json(evidence_dir / "render-binding.json", bound)
     return bound

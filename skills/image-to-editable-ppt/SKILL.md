@@ -66,8 +66,9 @@ PowerPoint render.
 
 Read [references/page-decision-tree.md](references/page-decision-tree.md) for
 object-versus-image choices, [references/manifest-schema.md](references/manifest-schema.md)
-for Builder input, and [references/cli-helper.md](references/cli-helper.md) for
-commands. The canonical task prompt is [prompts/page-task.md](prompts/page-task.md).
+for Builder input, [references/authoring-components.md](references/authoring-components.md)
+for reusable source-pixel components, and [references/cli-helper.md](references/cli-helper.md)
+for commands. The canonical task prompt is [prompts/page-task.md](prompts/page-task.md).
 
 ## CLI surface
 

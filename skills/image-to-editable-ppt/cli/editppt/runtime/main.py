@@ -193,7 +193,8 @@ def cmd_build(args: argparse.Namespace) -> int:
     if not manifest.is_file():
         print(f"manifest not found: {manifest}", file=sys.stderr)
         return 2
-    argv: list[object] = [manifest, "--out", page / args.out]
+    build_report = page / ".editppt/build.json"
+    argv: list[object] = [manifest, "--out", page / args.out, "--report", build_report]
     draft_preview = args.draft_preview or args.preview
     if draft_preview:
         argv += ["--preview", page / draft_preview]
@@ -201,9 +202,13 @@ def cmd_build(args: argparse.Namespace) -> int:
     if completed.returncode != 0:
         print(completed.stderr or completed.stdout, file=sys.stderr)
         return completed.returncode
+    report = _json(build_report)
     _print_json({
         "status": "ready",
         "output_pptx": str(page / args.out),
+        "build_report": str(build_report),
+        "font_substitutions": report.get("font_substitutions", []),
+        "text_adjustments": report.get("text_adjustments", []),
         "draft_preview": str(page / draft_preview) if draft_preview else "",
         "warning": "draft preview is not a Microsoft PowerPoint render" if draft_preview else "",
     })
@@ -267,13 +272,18 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     except json.JSONDecodeError:
         payload = {"ok": False, "runtime_stdout": completed.stdout, "runtime_stderr": completed.stderr}
     contract = _json(SKILL_ROOT / "skill.json")
-    extractor = find_extractor()
+    renderer = find_extractor()
     checks = {
         "powerpoint": {
             "available": Path("/Applications/Microsoft PowerPoint.app").is_dir(),
             "version": powerpoint_version(),
         },
-        "powerpoint_extractor": {"available": bool(extractor), "path": str(extractor or "")},
+        "powerpoint_renderer": {
+            "available": bool(renderer),
+            "path": str(renderer or ""),
+            "target_only": True,
+            "canary_created": False,
+        },
         "pdf_to_png": {"available": bool(shutil.which("pdftoppm")), "path": shutil.which("pdftoppm") or ""},
         "rsvg_convert": {"available": bool(shutil.which("rsvg-convert")), "path": shutil.which("rsvg-convert") or ""},
     }

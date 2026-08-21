@@ -27,10 +27,6 @@ from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 
-DEFAULT_EXTRACTOR = Path(
-    "/Users/zjah/Documents/code/zhangjian-skills/skills/my/document-parsing/"
-    "workflows/ppt-content-extractor/scripts/extract_ppt.py"
-)
 ROOT_FILES = {"source.png", "candidate.pptx", "candidate.png", "report.md", "artifacts"}
 
 
@@ -302,27 +298,31 @@ def _execute_codex(
 
 
 def _render_powerpoint(
-    candidate: Path, render_dir: Path, extractor: Path, build_id: str,
+    candidate: Path, render_dir: Path, skill_root: Path,
 ) -> tuple[Path | None, dict[str, Any], float, str]:
     render_dir.mkdir(parents=True, exist_ok=True)
+    editppt = skill_root / "cli/.venv/bin/editppt"
+    if not editppt.is_file():
+        resolved = shutil.which("editppt")
+        if not resolved:
+            return None, {}, 0.0, "Skill editppt executable is unavailable"
+        editppt = Path(resolved)
+    rendered = render_dir / "candidate.png"
     command = [
-        sys.executable, str(extractor), "--input", str(candidate), "--output",
-        str(render_dir), "--screenshots-only", "--require-renderer", "powerpoint",
-        "--slides", "1", "--screenshot-dpi", "200", "--build-id", build_id, "--json",
+        str(editppt), "render", str(candidate.parent), "--input", candidate.name,
+        "--out", str(rendered), "--evidence-dir", str(render_dir), "--dpi", "200",
     ]
     started = time.monotonic()
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     elapsed = time.monotonic() - started
-    report = _read_json(render_dir / "screenshot-report.json")
+    report = _read_json(render_dir / "powerpoint-render.json")
     if not report:
         try:
             value = json.loads(completed.stdout)
             report = value if isinstance(value, dict) else {}
         except json.JSONDecodeError:
             report = {}
-    files = report.get("files") if isinstance(report.get("files"), list) else []
-    rendered = render_dir / str(files[0]) if files else None
-    if completed.returncode != 0 or report.get("success") is not True or not rendered or not rendered.is_file():
+    if completed.returncode != 0 or report.get("success") is not True or not rendered.is_file():
         error = str(report.get("error") or completed.stderr.strip() or "PowerPoint render failed")
         return None, report, elapsed, error
     return rendered, report, elapsed, ""
@@ -636,8 +636,7 @@ def _run_page(
             for value in bindings
         )
         rendered, render_report, render_elapsed, render_error = _render_powerpoint(
-            page_dir / "candidate.pptx", render_dir, Path(args.extractor).resolve(),
-            f"benchmark-{case.page_id}-{_sha256(page_dir / 'candidate.pptx')[:12]}",
+            page_dir / "candidate.pptx", render_dir, Path(args.skill_root).resolve(),
         )
         if rendered:
             shutil.copy2(rendered, page_dir / "candidate.png")
@@ -709,11 +708,8 @@ def run_benchmark(args: argparse.Namespace) -> int:
     corpus = Path(args.corpus).expanduser().resolve()
     output = Path(args.out).expanduser().resolve()
     skill_root = Path(args.skill_root).expanduser().resolve()
-    extractor = Path(args.extractor).expanduser().resolve()
     if not (skill_root / "SKILL.md").is_file():
         raise BenchmarkError(f"invalid Skill root: {skill_root}")
-    if not extractor.is_file():
-        raise BenchmarkError(f"PowerPoint extractor is unavailable: {extractor}")
     cases = _resolve_cases(corpus, args.suite)
     run_id = args.run_id or _run_id(args.label)
     run_dir = output / run_id
@@ -783,7 +779,6 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--model", default="")
             command.add_argument("--effort", default="")
             command.add_argument("--codex-bin", default="codex")
-            command.add_argument("--extractor", default=os.environ.get("PPT_CONTENT_EXTRACTOR_SCRIPT", str(DEFAULT_EXTRACTOR)))
             command.set_defaults(func=run_benchmark)
         else:
             command.set_defaults(func=verify_corpus)

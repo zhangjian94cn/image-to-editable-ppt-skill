@@ -12,6 +12,10 @@ from copy import deepcopy
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from PIL import ImageFont
+
+from text_fit_tool import find_font
+
 
 EMU_PER_INCH = 914400
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -228,11 +232,76 @@ def is_measured_text(item):
     return str(item.get("font_size_source", "")).strip().lower() in {"measured", "hints"}
 
 
+def resolve_text_fonts(item):
+    """Bind text to an installed family before PowerPoint can substitute it."""
+
+    if item.get("preserve_font_name"):
+        return item
+
+    def resolve(record, inherited=""):
+        requested = str(record.get("font") or inherited or "PingFang SC").strip()
+        path, family = find_font(requested)
+        if family:
+            if family.casefold() != requested.casefold():
+                record.setdefault("_requested_font", requested)
+            record["font"] = family
+        if path:
+            record["_resolved_font_path"] = str(path)
+
+    resolve(item)
+    base_font = str(item.get("font") or "PingFang SC")
+    for run in item.get("runs", []):
+        if isinstance(run, dict):
+            resolve(run, base_font)
+    for paragraph in item.get("paragraphs", []):
+        if isinstance(paragraph, dict):
+            for run in paragraph.get("runs", []):
+                if isinstance(run, dict):
+                    resolve(run, base_font)
+    return item
+
+
+def _font_at_em(path):
+    if not path:
+        return None
+    try:
+        return ImageFont.truetype(str(path), size=100)
+    except OSError:
+        return None
+
+
+def _actual_text_limits(item, manifest):
+    """Return width/height font-size limits using the resolved local font."""
+
+    font = _font_at_em(item.get("_resolved_font_path"))
+    if font is None or "width" not in item or "height" not in item:
+        return None
+    lines = iter_text_lines(item)
+    width_pt = max(1.0, float(item["width"]) * 72)
+    height_pt = max(1.0, float(item["height"]) * 72)
+    requested = float(item.get("font_size", 18))
+    widths_per_pt = [float(font.getlength(line)) / 100.0 for line in lines]
+    wrap_enabled = item.get("wrap") not in (None, "", "none")
+    if wrap_enabled:
+        rendered_lines = sum(
+            max(1, math.ceil((units * requested) / width_pt))
+            for units in widths_per_pt
+        )
+        width_limit = requested
+    else:
+        rendered_lines = max(1, len(lines))
+        width_limit = width_pt / max(max(widths_per_pt, default=1.0), 0.01)
+    line_height = float(item.get("line_height", manifest.get("text_line_height", DEFAULT_TEXT_LINE_HEIGHT)))
+    height_limit = height_pt / (rendered_lines * max(line_height, 1.0))
+    return width_limit, height_limit
+
+
 def fitted_font_size(item, manifest):
     if item.get("fit_text") is False or manifest.get("fit_text") is False:
         return None
     if "width" not in item or "height" not in item:
         return None
+    actual_limits = _actual_text_limits(item, manifest)
     lines = iter_text_lines(item)
     requested = float(item.get("font_size", 18))
     width_pt = max(1.0, float(item.get("width", 1)) * 72)
@@ -255,6 +324,9 @@ def fitted_font_size(item, manifest):
         width_limit = width_pt / max(text_width_units(line) for line in lines)
     height_limit = height_pt / (line_count * max(line_height, 1.0))
     max_font_size = min(width_limit, height_limit) * safety
+    if actual_limits is not None:
+        actual_safety = 0.98 if is_measured_text(item) else max(safety, 0.94)
+        max_font_size = min(max_font_size, min(actual_limits) * actual_safety)
     explicit_max = item.get("max_font_size")
     if explicit_max not in (None, ""):
         max_font_size = min(max_font_size, float(explicit_max))
@@ -293,11 +365,21 @@ def fit_text_item(item, manifest):
 def normalize_manifest(manifest):
     """Return a manifest copy with pixel authoring fields resolved to inches."""
     normalized = deepcopy(manifest)
-    normalized["text_boxes"] = [
-        fit_text_item(normalize_position_item(normalized, item), normalized) for item in normalized.get("text_boxes", [])
-    ]
-    for key in ("images", "shapes", "tables"):
+    text_boxes = list(normalized.get("text_boxes", []))
+    normalized["text_boxes"] = []
+    for item in text_boxes:
+        prepared = resolve_text_fonts(normalize_position_item(normalized, item))
+        normalized["text_boxes"].append(fit_text_item(prepared, normalized))
+    for key in ("images", "shapes"):
         normalized[key] = [normalize_position_item(normalized, item) for item in normalized.get(key, [])]
+    normalized["tables"] = []
+    for item in manifest.get("tables", []):
+        prepared = resolve_text_fonts(normalize_position_item(normalized, item))
+        for row in prepared.get("rows", []):
+            for cell in row:
+                if isinstance(cell, dict):
+                    resolve_text_fonts(cell)
+        normalized["tables"].append(prepared)
     return normalized
 
 
@@ -318,14 +400,41 @@ def shape_fill(fill):
     return f'<a:solidFill><a:srgbClr val="{hex_color(fill)}"/></a:solidFill>'
 
 
-def shape_line_xml(stroke, width, dash=None):
+def shape_fill_for_item(item):
+    gradient = item.get("gradient")
+    if not gradient:
+        return shape_fill(item.get("fill"))
+    stops = gradient.get("stops") if isinstance(gradient, dict) else None
+    if not isinstance(stops, list) or len(stops) < 2:
+        raise ValueError("gradient requires at least two color stops")
+    stop_xml = []
+    for stop in stops:
+        position = float(stop.get("position", 0))
+        if 0 <= position <= 1:
+            position *= 100000
+        if not 0 <= position <= 100000:
+            raise ValueError("gradient stop position must be 0..1 or 0..100000")
+        stop_xml.append(
+            f'<a:gs pos="{int(round(position))}"><a:srgbClr val="{hex_color(stop.get("color"))}"/></a:gs>'
+        )
+    angle = int(round(float(gradient.get("angle", 0)) * 60000))
+    return (
+        '<a:gradFill rotWithShape="1"><a:gsLst>'
+        + "".join(stop_xml)
+        + f'</a:gsLst><a:lin ang="{angle}" scaled="1"/></a:gradFill>'
+    )
+
+
+def shape_line_xml(stroke, width, dash=None, *, start_arrow="none", end_arrow="none"):
     if not stroke or stroke == "none":
         return '<a:ln><a:noFill/></a:ln>'
     dash_xml = f'<a:prstDash val="{xml_text(dash)}"/>' if dash else ""
+    head_xml = f'<a:headEnd type="{xml_text(start_arrow)}"/>' if start_arrow and start_arrow != "none" else ""
+    tail_xml = f'<a:tailEnd type="{xml_text(end_arrow)}"/>' if end_arrow and end_arrow != "none" else ""
     return (
         f'<a:ln w="{int(float(width or 1) * 12700)}">'
         f'<a:solidFill><a:srgbClr val="{hex_color(stroke)}"/></a:solidFill>'
-        f"{dash_xml}"
+        f"{dash_xml}{head_xml}{tail_xml}"
         "</a:ln>"
     )
 
@@ -418,20 +527,31 @@ def image_xml(idx, rel_id, item):
 
 def _table_text_xml(value, table, row_index):
     cell = value if isinstance(value, dict) else {"text": value}
-    text = xml_text(cell.get("text", ""))
     font_size = int(float(cell.get("font_size", table.get("font_size", 12))) * 100)
-    font = xml_text(cell.get("font", table.get("font", "PingFang SC")))
-    color = hex_color(cell.get("color", table.get("header_color" if row_index == 0 else "color", "#111111")))
     bold = cell.get("bold", table.get("header_bold", row_index == 0))
-    bold_attr = ' b="1"' if bold else ""
     align = text_alignment(cell.get("align", table.get("align", "center")))[0]
     valign = text_vertical_alignment(cell.get("valign", table.get("valign", "middle")))[0]
+    raw_runs = cell.get("runs")
+    if not raw_runs:
+        raw_runs = [{"text": cell.get("text", "")}]
+    runs = []
+    for run in raw_runs:
+        run = run if isinstance(run, dict) else {"text": run}
+        run_size = int(float(run.get("font_size", cell.get("font_size", table.get("font_size", 12)))) * 100)
+        run_font = xml_text(run.get("font", cell.get("font", table.get("font", "PingFang SC"))))
+        run_color = hex_color(run.get("color", cell.get("color", table.get("header_color" if row_index == 0 else "color", "#111111"))))
+        run_bold = run.get("bold", bold)
+        run_bold_attr = ' b="1"' if run_bold else ""
+        runs.append(
+            f'<a:r><a:rPr lang="zh-CN" sz="{run_size}"{run_bold_attr}>'
+            f'<a:solidFill><a:srgbClr val="{run_color}"/></a:solidFill>'
+            f'<a:latin typeface="{run_font}"/><a:ea typeface="{run_font}"/><a:cs typeface="{run_font}"/>'
+            f'</a:rPr><a:t>{xml_text(run.get("text", ""))}</a:t></a:r>'
+        )
     return (
         f'<a:txBody><a:bodyPr wrap="square" anchor="{valign}" lIns="45720" tIns="22860" rIns="45720" bIns="22860"/>'
-        f'<a:lstStyle/><a:p><a:pPr algn="{align}"/><a:r>'
-        f'<a:rPr lang="zh-CN" sz="{font_size}"{bold_attr}><a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
-        f'<a:latin typeface="{font}"/><a:ea typeface="{font}"/><a:cs typeface="{font}"/></a:rPr>'
-        f'<a:t>{text}</a:t></a:r><a:endParaRPr lang="zh-CN" sz="{font_size}"/></a:p></a:txBody>'
+        f'<a:lstStyle/><a:p><a:pPr algn="{align}"/>{"".join(runs)}'
+        f'<a:endParaRPr lang="zh-CN" sz="{font_size}"/></a:p></a:txBody>'
     )
 
 
@@ -445,7 +565,7 @@ def _table_cell_xml(value, table, row_index):
         for side in ("L", "R", "T", "B")
     ) if border and border != "none" else "".join(f'<a:ln{side}><a:noFill/></a:ln{side}>' for side in ("L", "R", "T", "B"))
     fill_xml = shape_fill(fill)
-    return f'<a:tc>{_table_text_xml(value, table, row_index)}<a:tcPr>{fill_xml}{border_xml}</a:tcPr></a:tc>'
+    return f'<a:tc>{_table_text_xml(value, table, row_index)}<a:tcPr>{border_xml}{fill_xml}</a:tcPr></a:tc>'
 
 
 def table_xml(idx, item):
@@ -496,8 +616,14 @@ def shape_xml(idx, item):
     stroke_width = item.get("stroke_width", 1)
     flip_h = ' flipH="1"' if item.get("flip_h") else ""
     flip_v = ' flipV="1"' if item.get("flip_v") else ""
-    fill = shape_fill(item.get("fill"))
-    line = shape_line_xml(item.get("stroke", "#000000"), stroke_width, item.get("dash"))
+    fill = shape_fill_for_item(item)
+    line = shape_line_xml(
+        item.get("stroke", "#000000"),
+        stroke_width,
+        item.get("dash"),
+        start_arrow=item.get("start_arrow", item.get("begin_arrow", "none")),
+        end_arrow=item.get("end_arrow", "none"),
+    )
     preset = item.get("preset")
     if item.get("polygon_px"):
         geometry = custom_polygon_geometry_xml(item)
@@ -505,6 +631,12 @@ def shape_xml(idx, item):
         if not preset:
             preset = "line" if kind == "line" else "ellipse" if kind == "ellipse" else "roundRect" if kind == "roundRect" else "rect"
         geometry = preset_geometry_xml(preset, item)
+    if kind == "line" or str(preset or "").endswith("Connector3"):
+        return f"""
+      <p:cxnSp>
+        <p:nvCxnSpPr><p:cNvPr id="{idx}" name="Connector {idx}"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>
+        <p:spPr><a:xfrm{flip_h}{flip_v}><a:off x="{left}" y="{top}"/><a:ext cx="{width}" cy="{height}"/></a:xfrm>{geometry}{fill}{line}</p:spPr>
+      </p:cxnSp>"""
     return f"""
       <p:sp>
         <p:nvSpPr><p:cNvPr id="{idx}" name="{xml_text(kind.title())} {idx}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
@@ -857,6 +989,40 @@ def write_pptx(manifest, out_path, manifest_path):
             z.write(src, f"ppt/media/image{media_index}{image_ext(src)}")
             media_index += 1
     normalize_powerpoint_package(out, 1, width, height)
+    return normalized
+
+
+def build_report(normalized, out_path):
+    substitutions = []
+    text_adjustments = []
+    for index, item in enumerate(normalized.get("text_boxes", []), start=1):
+        if item.get("_requested_font"):
+            substitutions.append({
+                "text_box": index,
+                "requested": item["_requested_font"],
+                "resolved": item.get("font", ""),
+            })
+        if item.get("_requested_font_size") is not None:
+            requested = float(item["_requested_font_size"])
+            effective = float(item.get("font_size", requested))
+            text_adjustments.append({
+                "text_box": index,
+                "requested_pt": requested,
+                "effective_pt": effective,
+                "shrink_ratio": round(effective / max(requested, 0.01), 4),
+            })
+    return {
+        "schema_version": 1,
+        "output_pptx": str(Path(out_path).resolve()),
+        "objects": {
+            "shapes": len(normalized.get("shapes", [])),
+            "images": len(normalized.get("images", [])),
+            "tables": len(normalized.get("tables", [])),
+            "text_boxes": len(normalized.get("text_boxes", [])),
+        },
+        "font_substitutions": substitutions,
+        "text_adjustments": text_adjustments,
+    }
 
 
 def deck_slide_size(deck, page_entries):
@@ -1211,6 +1377,7 @@ def main():
     parser.add_argument("--deck-manifest")
     parser.add_argument("--out")
     parser.add_argument("--preview")
+    parser.add_argument("--report")
     args = parser.parse_args()
     if args.deck_manifest:
         deck, entries, notes_entries = page_entries_from_deck_manifest(args.deck_manifest)
@@ -1223,10 +1390,19 @@ def main():
     if not args.out:
         parser.error("--out is required unless --deck-manifest provides an output")
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
-    write_pptx(manifest, args.out, args.manifest)
+    normalized = write_pptx(manifest, args.out, args.manifest)
+    if args.report:
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps(build_report(normalized, args.out), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
     if args.preview:
         render_preview(manifest, args.manifest, args.preview)
     print(f"Wrote {args.out}")
+    if args.report:
+        print(f"Wrote {args.report}")
     if args.preview:
         print(f"Wrote {args.preview}")
 

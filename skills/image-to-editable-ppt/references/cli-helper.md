@@ -68,9 +68,11 @@ editppt compare /page --source source.png --candidate preview.png
 ```
 
 `render` requires Microsoft PowerPoint, rejects non-authoritative or repaired
-opens, and binds `preview.png` to the exact `page.pptx` SHA. It never falls back
-to LibreOffice or the manifest draft. `compare` writes overlay, diff, heatmap,
-and coarse diagnostic metrics; Codex must still view the images.
+opens, and binds `preview.png` to the exact `page.pptx` SHA. The Skill-owned
+renderer opens only a collision-proof copy of the target; it does not create a
+separate canary or close unrelated presentations. It never falls back to
+LibreOffice or the manifest draft. `compare` writes overlay, diff, heatmap, and
+coarse diagnostic metrics; Codex must still view the images.
 
 ## Assemble and diagnose
 

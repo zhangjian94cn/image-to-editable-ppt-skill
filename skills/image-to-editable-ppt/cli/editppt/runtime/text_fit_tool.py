@@ -18,6 +18,34 @@ FONT_DIRS = (
     Path.home() / "Library/Fonts",
 )
 
+PORTABLE_CJK_FALLBACKS = {
+    "microsoft yahei": "PingFang SC",
+    "microsoft yahei ui": "PingFang SC",
+    "微软雅黑": "PingFang SC",
+    "dengxian": "PingFang SC",
+    "等线": "PingFang SC",
+    "simhei": "Heiti SC",
+    "黑体": "Heiti SC",
+}
+
+
+def _fontconfig_match(query: str) -> tuple[Path | None, str]:
+    executable = shutil.which("fc-match")
+    if not executable:
+        return None, ""
+    completed = subprocess.run(
+        [executable, "-f", "%{family[0]}\t%{file}\n", query or "sans-serif"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    first = completed.stdout.splitlines()[0] if completed.stdout.strip() else ""
+    family, separator, filename = first.partition("\t")
+    candidate = Path(filename) if separator else None
+    if candidate and candidate.is_file():
+        return candidate.resolve(), family.strip() or candidate.stem
+    return None, ""
+
 
 def find_font(preferred: str) -> tuple[Path | None, str]:
     query = preferred.strip()
@@ -25,7 +53,12 @@ def find_font(preferred: str) -> tuple[Path | None, str]:
         direct = Path(query).expanduser()
         if direct.is_file():
             return direct.resolve(), direct.stem
-    names = [query, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Arial Unicode"]
+    portable = PORTABLE_CJK_FALLBACKS.get(query.casefold(), query)
+    for name in filter(None, (portable, query)):
+        matched_path, matched_family = _fontconfig_match(name)
+        if matched_path and (name == portable or matched_family.casefold() == query.casefold()):
+            return matched_path, matched_family
+    names = [portable, query, "PingFang SC", "Heiti SC", "Noto Sans CJK SC", "Arial Unicode MS"]
     for name in filter(None, names):
         token = name.casefold().replace(" ", "")
         for directory in FONT_DIRS:
@@ -35,17 +68,9 @@ def find_font(preferred: str) -> tuple[Path | None, str]:
                 for candidate in directory.rglob(suffix):
                     if token in candidate.stem.casefold().replace(" ", ""):
                         return candidate.resolve(), name
-    fc_match = shutil.which("fc-match")
-    if fc_match:
-        completed = subprocess.run(
-            [fc_match, "-f", "%{file}\n", query or "sans-serif"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        candidate = Path(completed.stdout.splitlines()[0]) if completed.stdout.strip() else None
-        if candidate and candidate.is_file():
-            return candidate.resolve(), query or candidate.stem
+    matched_path, matched_family = _fontconfig_match(portable or query or "sans-serif")
+    if matched_path:
+        return matched_path, matched_family
     return None, query or "default"
 
 

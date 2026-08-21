@@ -10,6 +10,8 @@ Release notes are generated from this file. Keep changelog entries in English.
 - Define reconstruction fidelity, single-line title, rich-text run, native table, source-bound asset, and fail-closed PowerPoint render rules in one canonical page prompt and Skill entry.
 - Replace the legacy controller scripts with deterministic `inspect`, `assets`, `build`, `text-fit`, `render`, `compare`, `assemble`, `formula`, and `doctor` tools.
 - Add native DrawingML table authoring, source-pixel crop/background separation, source-space layout/structure hints, PPTX object readback, and PowerPoint-bound visual comparison evidence.
+- Add reusable source-pixel authoring components for native timelines, connectors, cards, section bands, rich-text tables, and compact assets.
+- Resolve requested fonts to installed families inside the Builder and fit against actual local font metrics before PowerPoint can substitute fonts and change wrapping.
 
 ### Fixes
 
@@ -18,6 +20,8 @@ Release notes are generated from this file. Keep changelog entries in English.
 - Label Builder previews as drafts and prefer `rsvg-convert` for reliable audited SVG brand-asset previews.
 - Use the requested DPI when normalizing legacy PPT files through a local PDF conversion.
 - Wrap deterministic editable slide XML in a standards-complete presentation package so generated pages and assembled decks open directly in Microsoft PowerPoint.
+- Replace the external synthetic-canary renderer with a Skill-owned target-only PowerPoint renderer that snapshots user presentations, opens and closes only the collision-proof candidate, and records exact readback evidence.
+- Emit native DrawingML connectors and arrowheads instead of approximating connections with ordinary line shapes.
 
 ### Documentation
 

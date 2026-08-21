@@ -299,10 +299,10 @@ def page_record(job_dir, page_index, source, input_path, source_page):
         "source_page": source_page,
         "source_image": source.relative_to(job_dir).as_posix(),
         "page_dir": rel_page_dir,
-        "manifest": f"{rel_page_dir}/manifest.json",
-        "validation": f"{rel_page_dir}/validation.json",
+        "page_pptx": f"{rel_page_dir}/page.pptx",
+        "preview": f"{rel_page_dir}/preview.png",
+        "result": f"{rel_page_dir}/result.json",
         "input": Path(input_path).name,
-        "agent_status": "pending",
     }
 
 
@@ -383,7 +383,6 @@ def normalize_inputs(inputs, out_root="output/image-to-editable-ppt", job_dir=No
         "pages": pages,
         "notes_manifest": notes_manifest_path.relative_to(job_dir).as_posix(),
         "output": default_output_name(copied),
-        "validation": "validation.json",
     }
     deck_manifest_path = job_dir / "deck_manifest.json"
     deck_manifest_path.write_text(json.dumps(deck_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

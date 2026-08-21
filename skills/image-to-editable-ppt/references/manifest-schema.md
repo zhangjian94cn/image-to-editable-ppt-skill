@@ -66,6 +66,10 @@ dozens of unrelated rectangles and text boxes.
 
 - `shapes`: `rect`, `roundRect`, `ellipse`, `line`, or a supported DrawingML
   `preset`; use `fill: "none"` and `stroke: "none"` explicitly where needed.
+  A `line` becomes a native connector and supports `start_arrow`, `end_arrow`,
+  `dash`, and straight or bent connector presets. Shapes may use a source-backed
+  `gradient` with `angle` and two or more `{position, color}` stops; do not add
+  a gradient when the source is flat.
 - `images`: local source-bound paths for logos, photos, maps, screenshots, or
   complex illustrations. Keep their boxes tight.
 - `text_boxes`: editable text with runs, paragraphs, alignment, vertical
@@ -73,3 +77,8 @@ dozens of unrelated rectangles and text boxes.
 
 After `editppt build`, inspect with `editppt render` and `editppt inspect pptx`.
 The manifest draft is not final visual evidence.
+
+For page-specific Python authoring, use `editppt.authoring.SlideManifest` and
+the reusable patterns in [authoring-components.md](authoring-components.md).
+The Builder resolves requested fonts to installed families before fitting,
+which prevents PowerPoint-only substitution from changing line breaks.

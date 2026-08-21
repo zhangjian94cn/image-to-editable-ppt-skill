@@ -23,21 +23,29 @@ source.png 전체를 슬라이드 배경이나 전체 덮개 이미지로 사용
 source.png
 page.pptx
 result.json
-preview.png   # 선택 사항
+preview.png   # Microsoft PowerPoint가 page.pptx를 실제 렌더링한 결과
 ```
 
 ## CLI
 
 ```bash
 editppt prepare <input...>
-editppt inspect <page-dir>
-editppt extract-assets --input <image> --out-dir <dir>
+editppt inspect text|layout|structure|pptx ...
+editppt assets crop|separate|split-alpha|remove-chroma|brand ...
 editppt build <page-dir>
+editppt text-fit ...
 editppt render <page-dir>
+editppt compare <page-dir>
 editppt assemble <page-dir...> --out <deck.pptx>
+editppt formula render-latex ...
 editppt doctor --json
 ```
 
 CLI는 Codex가 필요할 때 선택하는 결정론적 보조 도구이며 강제 파이프라인이 아닙니다. 여러 페이지는 페이지별로 Codex 작업을 실행한 뒤 원본 순서대로 `editppt assemble`을 호출합니다.
 
-전체 슬라이드 래스터 이미지로 누락된 편집 구조를 숨기지 마세요. 로고, 사진, 지도, 스크린샷, 복잡한 일러스트는 독립적인 부분 이미지 객체로 사용할 수 있습니다.
+공유 Builder는 설치된 글꼴을 해석하고 네이티브 연결선과 리치 텍스트
+표를 작성하며 `editppt.authoring.SlideManifest`에서 재사용할 수 있습니다.
+전체 슬라이드 래스터 이미지로 누락된 편집 구조를 숨기지 마세요. 로고,
+사진, 지도, 스크린샷, 복잡한 일러스트는 독립적인 부분 이미지 객체로
+사용할 수 있습니다. 정확한 `page.pptx`가 Microsoft PowerPoint에서 실제로
+열리고 렌더링된 뒤에만 `result.json`을 작성할 수 있습니다.

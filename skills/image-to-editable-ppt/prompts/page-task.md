@@ -16,8 +16,11 @@ logos, photos, screenshots, maps, and genuinely complex illustrations. Never
 use all or nearly all of `source.png` as a background or covering image.
 
 Prefer existing Skill tools. If a page-specific authoring script is useful, it
-must call the shared Builder/components and must not duplicate font fitting,
-table, connector, or OOXML packaging logic.
+must use `editppt.authoring.SlideManifest` plus the shared Builder and must not
+duplicate font fitting, table, connector, or OOXML packaging logic. For a
+source single-line title, use one text box with `wrap: none`; let the Builder
+resolve the installed font and fit it, and use `editppt text-fit` when the box
+remains tight.
 
 Generate `page.pptx`, run `editppt render` on that exact file, and view the
 resulting `preview.png`. Repair visible content omissions, overlaps, overflow,

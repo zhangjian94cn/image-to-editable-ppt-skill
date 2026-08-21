@@ -28,6 +28,9 @@ Successful page snapshots contain only `source.png`, `candidate.pptx`, the
 Microsoft PowerPoint-rendered `candidate.png`, `report.md`, and `artifacts/`.
 Failed pages never receive placeholder candidate files.
 
+The final benchmark render calls the same Skill-owned `editppt render` command
+used by the page task; the runner does not maintain a second Office adapter.
+
 Because an authoritative render controls the native Microsoft PowerPoint app,
 benchmark Codex tasks run with `danger-full-access`. Use this development runner
 only with frozen, trusted benchmark inputs on a controlled workstation; it is

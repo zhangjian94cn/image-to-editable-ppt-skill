@@ -75,6 +75,10 @@ class SimpleCliTest(unittest.TestCase):
             self.assertTrue((run_dir / "pages/page_001/source.png").is_file())
             self.assertTrue((run_dir / "pages/page_002/source.png").is_file())
             self.assertFalse((run_dir / "page_jobs.json").exists())
+            payload = json.loads((run_dir / "deck_manifest.json").read_text())
+            assert "agent_status" not in json.dumps(payload)
+            assert "validation" not in json.dumps(payload)
+            assert payload["pages"][0]["result"].endswith("result.json")
 
     def test_build_draft_preview_and_inspect_native_table(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -133,7 +137,7 @@ class SimpleCliTest(unittest.TestCase):
         completed = run_cli("doctor", "--json")
         self.assertEqual(0, completed.returncode, completed.stderr)
         payload = json.loads(completed.stdout)
-        self.assertEqual("benchmark-driven-page-v2", payload["skill"]["contract_version"])
+        self.assertEqual("benchmark-driven-page-v3", payload["skill"]["contract_version"])
 
     def test_inspect_uses_configured_content_aware_ocr_without_exposing_token(self):
         with tempfile.TemporaryDirectory() as temporary:
