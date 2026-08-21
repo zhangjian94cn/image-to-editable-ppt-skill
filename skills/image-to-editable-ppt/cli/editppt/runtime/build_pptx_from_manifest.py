@@ -10,6 +10,7 @@ import tempfile
 import zipfile
 from copy import deepcopy
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 
 EMU_PER_INCH = 914400
@@ -664,6 +665,103 @@ def write_common_parts(z, slide_count, width, height, notes_count):
         z.writestr("ppt/notesMasters/_rels/notesMaster1.xml.rels", notes_master_rels_xml())
 
 
+def normalize_powerpoint_package(out_path, slide_count, width, height, notes_count=0):
+    """Wrap generated slide XML in a standard python-pptx package.
+
+    The editable slide XML is intentionally authored directly because it keeps
+    this Builder small and deterministic.  PowerPoint is stricter than
+    python-pptx and LibreOffice about the surrounding presentation package,
+    however, so use python-pptx only as the standards-compatible container and
+    transplant our editable slides and media into it.
+    """
+    from pptx import Presentation
+
+    out = Path(out_path)
+    with zipfile.ZipFile(out) as package:
+        generated = {name: package.read(name) for name in package.namelist()}
+
+    with tempfile.TemporaryDirectory(prefix="editppt-ooxml-") as temporary:
+        shell_path = Path(temporary) / "shell.pptx"
+        presentation = Presentation()
+        presentation.slide_width = int(width)
+        presentation.slide_height = int(height)
+        blank = presentation.slide_layouts[6]
+        for _ in range(slide_count):
+            presentation.slides.add_slide(blank)
+        if notes_count:
+            # Stable one-to-one notesSlide numbering lets source note parts be
+            # transplanted without rewriting their slide references.
+            for slide in presentation.slides:
+                slide.notes_slide
+        presentation.save(shell_path)
+        with zipfile.ZipFile(shell_path) as package:
+            standard = {name: package.read(name) for name in package.namelist()}
+
+    relationship_tag = f"{{{REL_NS}}}Relationship"
+    for slide_index in range(1, slide_count + 1):
+        slide_name = f"ppt/slides/slide{slide_index}.xml"
+        rels_name = f"ppt/slides/_rels/slide{slide_index}.xml.rels"
+        standard[slide_name] = generated[slide_name]
+        target_rels = ET.fromstring(standard[rels_name])
+        source_rels = ET.fromstring(generated[rels_name])
+        for source_rel in source_rels.findall(relationship_tag):
+            if str(source_rel.get("Type") or "").endswith("/slideLayout"):
+                continue
+            for existing in list(target_rels):
+                if existing.get("Id") == source_rel.get("Id"):
+                    target_rels.remove(existing)
+            target_rels.append(deepcopy(source_rel))
+        standard[rels_name] = ET.tostring(
+            target_rels,
+            encoding="UTF-8",
+            xml_declaration=True,
+        )
+
+    for name, data in generated.items():
+        if name.startswith("ppt/media/") or name.startswith("ppt/notesSlides/"):
+            standard[name] = data
+
+    content_types_ns = "http://schemas.openxmlformats.org/package/2006/content-types"
+    target_types = ET.fromstring(standard["[Content_Types].xml"])
+    source_types = ET.fromstring(generated["[Content_Types].xml"])
+    existing_types = {
+        (child.tag, child.get("Extension") or child.get("PartName"))
+        for child in target_types
+    }
+    for child in source_types:
+        key = (child.tag, child.get("Extension") or child.get("PartName"))
+        if key not in existing_types:
+            target_types.append(deepcopy(child))
+            existing_types.add(key)
+    ET.register_namespace("", content_types_ns)
+    standard["[Content_Types].xml"] = ET.tostring(
+        target_types,
+        encoding="UTF-8",
+        xml_declaration=True,
+    )
+
+    app_ns = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
+    app_properties = ET.fromstring(standard["docProps/app.xml"])
+    slides_property = app_properties.find(f"{{{app_ns}}}Slides")
+    if slides_property is not None:
+        slides_property.text = str(slide_count)
+    format_property = app_properties.find(f"{{{app_ns}}}PresentationFormat")
+    if format_property is not None:
+        format_property.text = "Widescreen" if slide_size_type(width, height) == "wide" else "Custom"
+    ET.register_namespace("", app_ns)
+    standard["docProps/app.xml"] = ET.tostring(
+        app_properties,
+        encoding="UTF-8",
+        xml_declaration=True,
+    )
+
+    temporary_out = out.with_suffix(out.suffix + ".tmp")
+    with zipfile.ZipFile(temporary_out, "w", zipfile.ZIP_DEFLATED) as package:
+        for name, data in standard.items():
+            package.writestr(name, data)
+    temporary_out.replace(out)
+
+
 def write_pptx(manifest, out_path, manifest_path):
     width = emu(manifest.get("slide", {}).get("width", 13.333))
     height = emu(manifest.get("slide", {}).get("height", 7.5))
@@ -683,6 +781,7 @@ def write_pptx(manifest, out_path, manifest_path):
                 src = base / src
             z.write(src, f"ppt/media/image{media_index}{image_ext(src)}")
             media_index += 1
+    normalize_powerpoint_package(out, 1, width, height)
 
 
 def deck_slide_size(deck, page_entries):
@@ -726,6 +825,7 @@ def write_deck(deck, page_entries, out_path, notes_entries):
                 else:
                     z.writestr(f"ppt/notesSlides/notesSlide{notes_index}.xml", notes_slide_xml(note.get("text", "")))
                 z.writestr(f"ppt/notesSlides/_rels/notesSlide{notes_index}.xml.rels", notes_rels_xml(slide_index))
+    normalize_powerpoint_package(out, len(page_entries), width, height, len(notes_by_page))
 
 
 def page_entries_from_deck_manifest(deck_manifest_path):
