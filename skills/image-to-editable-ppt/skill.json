@@ -1,0 +1,7 @@
+{
+  "name": "image-to-editable-ppt",
+  "contract_version": "simple-codex-page-v1",
+  "upstream_base": "fb869763127fd31ba7288d905671ffc4ea542f60",
+  "required_outputs": ["page.pptx", "result.json"],
+  "optional_outputs": ["preview.png", "manifest.json"]
+}

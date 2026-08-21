@@ -4,6 +4,15 @@ Release notes are generated from this file. Keep changelog entries in English.
 
 ## Unreleased
 
+### Improvements
+
+- Replace the multi-agent run controller with one Codex task per page and a small optional `editppt` helper surface.
+- Keep OCR, source-bound asset extraction, editable OOXML building, preview rendering, deck assembly, and environment diagnosis without controller state or delivery gates.
+
+### Fixes
+
+- Use the requested DPI when normalizing legacy PPT files through a local PDF conversion.
+
 ### Documentation
 
 - Add complete Korean README and English and Korean versions of the Docsify usage documentation, with synchronized language navigation, search, and pagination. (#26)

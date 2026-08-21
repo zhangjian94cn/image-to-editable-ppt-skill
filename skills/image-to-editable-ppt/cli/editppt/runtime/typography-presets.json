@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "catalog_version": "2026-08-20.v1",
+  "default_scene_id": "state-owned-enterprise",
+  "default_scheme_id": "soe-yahei",
+  "families": {
+    "microsoft-yahei": {"label": "微软雅黑", "aliases": ["Microsoft YaHei", "Microsoft YaHei UI", "微软雅黑"], "required_roles": ["regular", "strong"]},
+    "dengxian": {"label": "等线", "aliases": ["DengXian", "等线"], "required_roles": ["regular", "strong"]},
+    "simhei": {"label": "黑体", "aliases": ["SimHei", "黑体"], "required_roles": ["regular"]},
+    "arial": {"label": "Arial", "aliases": ["Arial"], "required_roles": ["regular", "strong"]},
+    "aptos": {"label": "Aptos", "aliases": ["Aptos"], "required_roles": ["regular", "strong"]}
+  },
+  "role_buckets": {
+    "cover_title": "title", "page_title": "title", "title_descriptor": "title",
+    "lead": "body", "major_section_title": "title", "section_title": "title",
+    "module_title": "title", "label": "body", "body": "body", "dense_body": "body",
+    "quote_body": "body", "kpi_label": "metric", "kpi_value": "metric",
+    "caption": "body", "table_header": "body", "table_body": "body"
+  },
+  "scenes": [
+    {"id": "state-owned-enterprise", "label": "国企政务", "description": "稳重、规范、层级清楚，适合国企汇报与政务材料。", "default_scheme_id": "soe-yahei", "scheme_ids": ["soe-yahei", "soe-dengxian", "soe-formal"]},
+    {"id": "general-business", "label": "通用商务", "description": "克制清晰，适合客户方案、经营分析和内部汇报。", "default_scheme_id": "business-yahei", "scheme_ids": ["business-yahei", "business-dengxian", "business-mixed"]},
+    {"id": "technology-internet", "label": "科技互联网", "description": "简洁现代，适合技术方案、产品介绍和数据分析。", "default_scheme_id": "tech-dengxian", "scheme_ids": ["tech-dengxian", "tech-mixed", "tech-yahei"]}
+  ],
+  "schemes": {
+    "soe-yahei": {"scene_id": "state-owned-enterprise", "label": "微软雅黑统一", "description": "标题、正文统一使用微软雅黑，最稳妥。", "buckets": {"title": {"cjk_family": "microsoft-yahei", "latin_family": "arial"}, "body": {"cjk_family": "microsoft-yahei", "latin_family": "arial"}, "metric": {"cjk_family": "microsoft-yahei", "latin_family": "arial"}}},
+    "soe-dengxian": {"scene_id": "state-owned-enterprise", "label": "等线简洁", "description": "全篇等线，更现代但仍保持正式。", "buckets": {"title": {"cjk_family": "dengxian", "latin_family": "arial"}, "body": {"cjk_family": "dengxian", "latin_family": "arial"}, "metric": {"cjk_family": "dengxian", "latin_family": "arial"}}},
+    "soe-formal": {"scene_id": "state-owned-enterprise", "label": "正式强调", "description": "黑体仅用于大标题，其余文字使用微软雅黑。", "buckets": {"title": {"cjk_family": "simhei", "latin_family": "arial", "strong_face_role": "regular", "allow_synthetic_bold": false}, "body": {"cjk_family": "microsoft-yahei", "latin_family": "arial"}, "metric": {"cjk_family": "microsoft-yahei", "latin_family": "arial"}}},
+    "business-yahei": {"scene_id": "general-business", "label": "微软雅黑统一", "description": "兼容性优先的通用商务方案。", "buckets": {"title": {"cjk_family": "microsoft-yahei", "latin_family": "arial"}, "body": {"cjk_family": "microsoft-yahei", "latin_family": "arial"}, "metric": {"cjk_family": "microsoft-yahei", "latin_family": "arial"}}},
+    "business-dengxian": {"scene_id": "general-business", "label": "等线统一", "description": "全篇等线，信息密集页面更轻盈。", "buckets": {"title": {"cjk_family": "dengxian", "latin_family": "arial"}, "body": {"cjk_family": "dengxian", "latin_family": "arial"}, "metric": {"cjk_family": "dengxian", "latin_family": "arial"}}},
+    "business-mixed": {"scene_id": "general-business", "label": "等线标题 + 微软雅黑正文", "description": "标题更利落，正文保持稳健易读。", "buckets": {"title": {"cjk_family": "dengxian", "latin_family": "arial"}, "body": {"cjk_family": "microsoft-yahei", "latin_family": "arial"}, "metric": {"cjk_family": "microsoft-yahei", "latin_family": "arial"}}},
+    "tech-dengxian": {"scene_id": "technology-internet", "label": "等线统一", "description": "中文等线、英文和数据 Aptos，简洁现代。", "buckets": {"title": {"cjk_family": "dengxian", "latin_family": "aptos"}, "body": {"cjk_family": "dengxian", "latin_family": "aptos"}, "metric": {"cjk_family": "dengxian", "latin_family": "aptos"}}},
+    "tech-mixed": {"scene_id": "technology-internet", "label": "等线标题 + 微软雅黑正文", "description": "标题现代，正文兼顾长文阅读。", "buckets": {"title": {"cjk_family": "dengxian", "latin_family": "aptos"}, "body": {"cjk_family": "microsoft-yahei", "latin_family": "aptos"}, "metric": {"cjk_family": "microsoft-yahei", "latin_family": "aptos"}}},
+    "tech-yahei": {"scene_id": "technology-internet", "label": "微软雅黑统一", "description": "科技风格中的稳健兼容方案。", "buckets": {"title": {"cjk_family": "microsoft-yahei", "latin_family": "aptos"}, "body": {"cjk_family": "microsoft-yahei", "latin_family": "aptos"}, "metric": {"cjk_family": "microsoft-yahei", "latin_family": "aptos"}}}
+  }
+}
