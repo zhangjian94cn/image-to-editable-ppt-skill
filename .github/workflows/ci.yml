@@ -29,8 +29,11 @@ jobs:
       - name: Check CLI help
         run: |
           editppt --help
-          editppt image --help
-          editppt run finalize --help
+          editppt prepare --help
+          editppt inspect --help
+          editppt build --help
+          editppt assemble --help
+          editppt doctor --help
           editppt formula render-latex --help
 
       - name: Compile runtime Python files

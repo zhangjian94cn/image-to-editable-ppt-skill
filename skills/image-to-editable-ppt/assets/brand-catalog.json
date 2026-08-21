@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "catalog_version": "2026-08-21.simple-v1",
+  "brand_packs": {
+    "china-mobile": {
+      "label": "中国移动",
+      "design_tokens": {"brand_blue": "#0085D0", "brand_green": "#8DC21F"},
+      "assets": [
+        {
+          "id": "cmcc-logo-horizontal-blue-white",
+          "kind": "logo",
+          "label": "中国移动横版蓝色标识（白底）",
+          "owner": "China Mobile",
+          "license": "user-approved-brand-reference",
+          "path": "china-mobile/cmcc-logo-horizontal-blue-white.svg"
+        }
+      ]
+    }
+  }
+}
