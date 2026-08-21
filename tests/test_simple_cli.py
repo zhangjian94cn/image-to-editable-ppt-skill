@@ -88,6 +88,10 @@ class SimpleCliTest(unittest.TestCase):
                 self.assertEqual(0, built.returncode, built.stderr)
                 self.assertTrue((page / "page.pptx").is_file())
                 self.assertTrue((page / "preview.png").is_file())
+                with zipfile.ZipFile(page / "page.pptx") as package:
+                    self.assertIn("ppt/presProps.xml", package.namelist())
+                    self.assertIn("ppt/viewProps.xml", package.namelist())
+                    self.assertIn("docProps/thumbnail.jpeg", package.namelist())
                 pages.append(page)
 
             out = root / "deck.pptx"
