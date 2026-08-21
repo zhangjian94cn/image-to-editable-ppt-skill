@@ -135,9 +135,11 @@ class SimpleCliTest(unittest.TestCase):
 
     def test_doctor_reports_contract_version(self):
         completed = run_cli("doctor", "--json")
-        self.assertEqual(0, completed.returncode, completed.stderr)
         payload = json.loads(completed.stdout)
         self.assertEqual("benchmark-driven-page-v3", payload["skill"]["contract_version"])
+        powerpoint_ready = payload["editppt_checks"]["powerpoint"]["available"]
+        renderer_ready = payload["editppt_checks"]["powerpoint_renderer"]["available"]
+        self.assertEqual(0 if powerpoint_ready and renderer_ready else 1, completed.returncode)
 
     def test_inspect_uses_configured_content_aware_ocr_without_exposing_token(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -201,7 +203,8 @@ class SimpleCliTest(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
             separation = json.loads(result.stdout)
             self.assertLess(separation["put_back_mae"], 0.01)
-            self.assertEqual("RGBA", Image.open(separated).mode)
+            with Image.open(separated) as separated_image:
+                self.assertEqual("RGBA", separated_image.mode)
 
     def test_layout_and_structure_use_source_coordinates_without_object_ids(self):
         with tempfile.TemporaryDirectory() as temporary:
