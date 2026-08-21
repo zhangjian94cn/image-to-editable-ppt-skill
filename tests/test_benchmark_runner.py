@@ -8,7 +8,14 @@ from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches
 
-from benchmark_runner.runner import ROOT_FILES, _issues, _pptx_metrics, _resolve_cases
+from benchmark_runner.runner import (
+    ROOT_FILES,
+    _codex_command,
+    _issues,
+    _pptx_metrics,
+    _resolve_cases,
+    _skill_trace,
+)
 
 
 def _corpus(tmp_path: Path) -> Path:
@@ -50,3 +57,18 @@ def test_pptx_readback_flags_full_page_picture_and_text(tmp_path: Path):
 
 def test_snapshot_root_contract_is_review_first():
     assert ROOT_FILES == {"source.png", "candidate.pptx", "candidate.png", "report.md", "artifacts"}
+
+
+def test_benchmark_codex_has_host_access_for_powerpoint(tmp_path: Path):
+    args = Namespace(codex_bin="/usr/bin/true", profile="image-to-ppt-agent", model="", effort="")
+    command = _codex_command(args, tmp_path, tmp_path / "source.png")
+    assert command[command.index("-s") + 1] == "danger-full-access"
+
+
+def test_skill_trace_reads_runner_and_page_local_files(tmp_path: Path):
+    runner_trace = tmp_path / "telemetry.jsonl"
+    page_trace = tmp_path / "editppt-events.jsonl"
+    runner_trace.write_text(json.dumps({"command": "inspect", "subcommand": "text", "exit_code": 0, "elapsed_sec": 1.25}) + "\n")
+    page_trace.write_text(json.dumps({"command": "build", "exit_code": 0, "elapsed_sec": 0.5}) + "\n")
+    evidence = _skill_trace(runner_trace, page_trace)
+    assert [value.command for value in evidence] == ["editppt inspect text", "editppt build"]

@@ -259,7 +259,7 @@ def _codex_command(args: argparse.Namespace, work: Path, source: Path) -> list[s
         raise BenchmarkError(f"Codex CLI is unavailable: {args.codex_bin}")
     command = [
         str(codex), "exec", "--profile", args.profile, "--json",
-        "--skip-git-repo-check", "-C", str(work), "-s", "workspace-write",
+        "--skip-git-repo-check", "-C", str(work), "-s", "danger-full-access",
     ]
     if args.model:
         command += ["-m", args.model]
@@ -444,27 +444,31 @@ def _events(path: Path) -> tuple[list[CommandEvidence], list[str], list[str]]:
     return commands, decisions, changed
 
 
-def _skill_trace(path: Path) -> list[CommandEvidence]:
+def _skill_trace(*paths: Path) -> list[CommandEvidence]:
     evidence: list[CommandEvidence] = []
-    if not path.is_file():
-        return evidence
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError:
+    seen: set[tuple[str, int | None, float | None]] = set()
+    for path in paths:
+        if not path.is_file():
             continue
-        if not isinstance(value, dict):
-            continue
-        command = " ".join(
-            str(item) for item in (value.get("command"), value.get("subcommand")) if item
-        )
-        evidence.append(
-            CommandEvidence(
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(value, dict):
+                continue
+            command = " ".join(
+                str(item) for item in (value.get("command"), value.get("subcommand")) if item
+            )
+            item = CommandEvidence(
                 command=f"editppt {command}".strip(),
                 exit_code=value.get("exit_code"),
                 elapsed_sec=float(value["elapsed_sec"]) if value.get("elapsed_sec") is not None else None,
             )
-        )
+            key = (item.command, item.exit_code, item.elapsed_sec)
+            if key not in seen:
+                evidence.append(item)
+                seen.add(key)
     return evidence
 
 
@@ -610,7 +614,10 @@ def _run_page(
         )
         outcome.metrics["codex_elapsed_sec"] = round(codex_elapsed, 3)
         outcome.commands, outcome.decisions, changed = _events(codex_dir / "events.jsonl")
-        outcome.skill_commands = _skill_trace(artifacts / "telemetry.jsonl")
+        outcome.skill_commands = _skill_trace(
+            artifacts / "telemetry.jsonl",
+            work / "editppt-events.jsonl",
+        )
         if returncode != 0:
             raise BenchmarkError(f"Codex exited {returncode}: {stderr[-1000:]}")
         result = _read_json(work / "result.json")
