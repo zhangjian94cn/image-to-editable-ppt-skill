@@ -12,6 +12,7 @@ Release notes are generated from this file. Keep changelog entries in English.
 ### Fixes
 
 - Use the requested DPI when normalizing legacy PPT files through a local PDF conversion.
+- Wrap deterministic editable slide XML in a standards-complete presentation package so generated pages and assembled decks open directly in Microsoft PowerPoint.
 
 ### Documentation
 
