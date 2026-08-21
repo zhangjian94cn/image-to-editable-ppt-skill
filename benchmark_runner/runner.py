@@ -66,6 +66,7 @@ class PageOutcome:
     issues: list[dict[str, str]] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
     commands: list[CommandEvidence] = field(default_factory=list)
+    skill_commands: list[CommandEvidence] = field(default_factory=list)
     decisions: list[str] = field(default_factory=list)
 
 
@@ -443,11 +444,41 @@ def _events(path: Path) -> tuple[list[CommandEvidence], list[str], list[str]]:
     return commands, decisions, changed
 
 
+def _skill_trace(path: Path) -> list[CommandEvidence]:
+    evidence: list[CommandEvidence] = []
+    if not path.is_file():
+        return evidence
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(value, dict):
+            continue
+        command = " ".join(
+            str(item) for item in (value.get("command"), value.get("subcommand")) if item
+        )
+        evidence.append(
+            CommandEvidence(
+                command=f"editppt {command}".strip(),
+                exit_code=value.get("exit_code"),
+                elapsed_sec=float(value["elapsed_sec"]) if value.get("elapsed_sec") is not None else None,
+            )
+        )
+    return evidence
+
+
 def _issues(metrics: dict[str, Any], render_error: str = "") -> tuple[str, list[dict[str, str]]]:
     issues: list[dict[str, str]] = []
     if render_error:
         issues.append({"severity": "P0", "category": "execution", "message": render_error})
         return "execution_failed", issues
+    if metrics.get("codex_powerpoint_rendered") is not True:
+        issues.append({
+            "severity": "P0",
+            "category": "execution",
+            "message": "Codex 未留下与最终 page.pptx SHA 绑定的 editppt render 证据",
+        })
     coverage = metrics.get("text_coverage")
     if isinstance(coverage, (int, float)) and coverage < 0.7:
         issues.append({"severity": "P0", "category": "content", "message": f"原文逐块覆盖率仅 {coverage:.1%}"})
@@ -501,6 +532,7 @@ def _report(
     lines += [
         "", "## 时间", "", "| 阶段 | 耗时 |", "|---|---:|",
         f"| 完整页面任务 | {_seconds(outcome.elapsed_sec)} |",
+        f"| Codex 执行 | {_seconds(metrics.get('codex_elapsed_sec'))} |",
         f"| Microsoft PowerPoint 渲染 | {_seconds(render_elapsed)} |",
         "", "## PPTX 回读与视觉指标", "", "| 指标 | 值 |", "|---|---:|",
     ]
@@ -508,6 +540,7 @@ def _report(
         "object_count", "text_shape_count", "native_shape_count", "table_count",
         "picture_count", "max_picture_coverage", "text_coverage",
         "coarse_rgb_loss", "content_ink_loss", "out_of_bounds_count",
+        "codex_powerpoint_rendered",
     ):
         if name in metrics and metrics[name] is not None:
             lines.append(f"| `{name}` | `{metrics[name]}` |")
@@ -517,9 +550,20 @@ def _report(
     else:
         lines.append("- 未记录。")
     lines += ["", "## 调用脚本与命令", ""]
+    if outcome.skill_commands:
+        lines.append("### `editppt` 确定性工具")
+        lines.append("")
+        for command in outcome.skill_commands:
+            lines.append(
+                f"- `{command.command}` → `{command.exit_code}`，{_seconds(command.elapsed_sec)}"
+            )
+        lines.append("")
+        lines.append("### Codex shell 记录")
+        lines.append("")
     if outcome.commands:
         for command in outcome.commands:
-            lines.append(f"- `{command.command.replace('`', '\N{MODIFIER LETTER GRAVE ACCENT}')}` → `{command.exit_code}`")
+            safe_command = command.command.replace("`", "ˋ")
+            lines.append(f"- `{safe_command}` → `{command.exit_code}`")
     else:
         lines.append("- 未记录。")
     if changed:
@@ -566,6 +610,7 @@ def _run_page(
         )
         outcome.metrics["codex_elapsed_sec"] = round(codex_elapsed, 3)
         outcome.commands, outcome.decisions, changed = _events(codex_dir / "events.jsonl")
+        outcome.skill_commands = _skill_trace(artifacts / "telemetry.jsonl")
         if returncode != 0:
             raise BenchmarkError(f"Codex exited {returncode}: {stderr[-1000:]}")
         result = _read_json(work / "result.json")
@@ -573,6 +618,16 @@ def _run_page(
         if result.get("status") != "ready" or not candidate.is_file() or candidate.stat().st_size == 0:
             raise BenchmarkError("Codex did not produce ready result.json and a non-empty page.pptx")
         shutil.copy2(candidate, page_dir / "candidate.pptx")
+        candidate_sha = _sha256(page_dir / "candidate.pptx")
+        bindings = [
+            _read_json(path)
+            for path in work.rglob("render-binding.json")
+            if path.is_file()
+        ]
+        outcome.metrics["codex_powerpoint_rendered"] = any(
+            value.get("authoritative") is True and value.get("input_sha256") == candidate_sha
+            for value in bindings
+        )
         rendered, render_report, render_elapsed, render_error = _render_powerpoint(
             page_dir / "candidate.pptx", render_dir, Path(args.extractor).resolve(),
             f"benchmark-{case.page_id}-{_sha256(page_dir / 'candidate.pptx')[:12]}",
@@ -596,6 +651,7 @@ def _run_page(
         "verdict": outcome.verdict, "elapsed_sec": outcome.elapsed_sec,
         "metrics": outcome.metrics, "issues": outcome.issues,
         "commands": [asdict(value) for value in outcome.commands],
+        "skill_commands": [asdict(value) for value in outcome.skill_commands],
         "decisions": outcome.decisions, "error": outcome.error,
         "render_elapsed_sec": render_elapsed,
     }

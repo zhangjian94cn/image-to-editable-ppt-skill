@@ -1,67 +1,85 @@
 # `editppt` command reference
 
-The CLI contains optional deterministic helpers. It does not own page state and
-does not dispatch agents.
+Every command has one responsibility, writes only to caller-selected paths,
+prints JSON on success, and exits non-zero on failure. Setting
+`EDITPPT_TRACE_FILE=/path/events.jsonl` records command, arguments, duration,
+exit code, and error without recording secrets.
 
-## Prepare inputs
+## Prepare
 
 ```bash
-editppt prepare input.pdf --out-root output/image-to-editable-ppt
-editppt prepare page-1.png page-2.png --job-dir /absolute/run-dir
+editppt prepare input.pdf --job-dir /absolute/run
 ```
 
-The command normalizes visual inputs into ordered page directories containing
-`source.png`. Existing run metadata is an input convenience only; Codex does
-not need to advance it.
+Normalizes images, PDFs, or visual PPTX files into ordered page directories.
 
-## Inspect one page
+## Inspect
 
 ```bash
-editppt inspect /absolute/page-dir
+editppt inspect text /page
+editppt inspect layout /page
+editppt inspect structure /page
+editppt inspect pptx /page --input page.pptx
 ```
 
-This writes or refreshes `text_hints.json` and `text_hints.png`, then prints a
-small JSON summary. Treat the measurements as evidence, not as a page plan.
+- `text`: content-aware OCR when configured, otherwise explicitly labeled
+  geometric hints.
+- `layout`: content and whitespace bands in source pixels.
+- `structure`: source-space line and rectangle candidates; no semantic object
+  IDs or containment decisions.
+- `pptx`: native object, text, table, connector, picture-coverage, and boundary
+  readback.
 
-## Extract transparent components
+## Assets
 
 ```bash
-editppt extract-assets \
-  --input /absolute/sheet.png \
-  --out-dir /absolute/page-dir/assets \
-  --manifest /absolute/page-dir/assets/components.json
+editppt assets crop --input source.png --out assets/logo.png \
+  --left 1300 --top 30 --right 1540 --bottom 120
+editppt assets separate --input assets/crop.png --out assets/crop-rgba.png
+editppt assets split-alpha --input assets/sheet.png --out-dir assets/items
+editppt assets remove-chroma --input green.png --out clean.png --auto-key border
+editppt assets brand
+editppt assets brand --id cmcc-logo-horizontal-blue-white --out assets/cmcc.svg
 ```
 
-Use this for an alpha asset sheet or a source-bound transparent asset. It does
-not infer semantics.
+`crop` reports source coverage and warns at 80% page coverage. `separate`
+removes only an edge-connected flat background, preserves foreground pixels,
+and reports put-back error. Use these for compact independent assets, never as
+a page-raster shortcut.
 
-## Build and render
+## Build and text fitting
 
 ```bash
-editppt build /absolute/page-dir
-editppt build /absolute/page-dir --manifest manifest.json --out page.pptx
-editppt render /absolute/page-dir
+editppt build /page
+editppt build /page --draft-preview manifest-draft.png
+editppt text-fit --text '单行标题' --width-px 900 --height-px 80 --single-line
 ```
 
-`build` creates `page.pptx` and, unless disabled, `preview.png` from the
-optional manifest contract. `render` refreshes only the deterministic preview
-from the current manifest; it is a visual aid, not an acceptance gate.
+`build` uses the shared manifest Builder. A draft preview is optional and is
+explicitly not a PowerPoint render. `text-fit` measures installed fonts and
+returns source-pixel measurements; convert pixels to points using the actual
+source-to-slide scale.
 
-## Assemble pages
+## True render and compare
 
 ```bash
-editppt assemble /absolute/page-001 /absolute/page-002 --out /absolute/deck.pptx
+editppt render /page --input page.pptx --out preview.png
+editppt compare /page --source source.png --candidate preview.png
 ```
 
-Assembly consumes each page directory in command order. The deterministic
-Builder uses `manifest.json` when present. A single page without a manifest may
-be copied directly; a multi-page deck requires build manifests so slide media
-and relationships stay valid.
+`render` requires Microsoft PowerPoint, rejects non-authoritative or repaired
+opens, and binds `preview.png` to the exact `page.pptx` SHA. It never falls back
+to LibreOffice or the manifest draft. `compare` writes overlay, diff, heatmap,
+and coarse diagnostic metrics; Codex must still view the images.
 
-## Diagnose installation
+## Assemble and diagnose
 
 ```bash
+editppt assemble /page-001 /page-002 --out /absolute/deck.pptx
 editppt doctor --json
 ```
 
-The JSON report includes the Skill contract version and local dependencies.
+Assembly consumes each independent `page.pptx` in supplied order and copies its
+slide relationship graph (media, tables, charts, layouts, themes, and notes)
+into one Open XML package. It does not require a manifest. Render the assembled
+deck through PowerPoint in the caller's final smoke test.

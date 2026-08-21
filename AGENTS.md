@@ -14,7 +14,9 @@ must not be committed.
   `references/manifest-schema.md`, and command syntax in
   `references/cli-helper.md`.
 - Preserve OCR, source-bound asset extraction, editable OOXML building,
-  previews, assembly, and diagnostics as independently testable helpers.
+  PowerPoint-authoritative rendering, assembly, and diagnostics as
+  independently testable helpers. A true render is authoring evidence for the
+  page-owning Codex task, not a backend download gate.
 - Do not introduce run-state, coverage, containment, Hybrid fallback, Office
   acceptance, or fixed repair-loop contracts into the public Skill surface.
 

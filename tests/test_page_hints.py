@@ -170,44 +170,6 @@ class SizeGroupClusterTest(unittest.TestCase):
             self.assertLessEqual(max(members) / min(members), 1.12 + 1e-9)
 
 
-class DeckTextHintsTest(unittest.TestCase):
-    def test_offline_fallback_writes_hints_per_page(self):
-        import json as _json
-        import os as _os
-        import subprocess as _sub
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmp:
-            run_dir = Path(tmp) / "run"
-            for page_id in ("page_001", "page_002"):
-                page_dir = run_dir / "pages" / page_id
-                page_dir.mkdir(parents=True)
-                image = Image.new("RGB", IMAGE_SIZE, "white")
-                draw_glyph_block(ImageDraw.Draw(image), 100, 100, glyph_h=30, chars=8)
-                image.save(page_dir / "source.png")
-            (run_dir / "deck_manifest.json").write_text(_json.dumps(
-                {"schema_version": 1, "run_id": "t", "input_type": "images", "pages": []}))
-            (run_dir / "page_jobs.json").write_text(_json.dumps({
-                "schema_version": 1, "run_id": "t", "max_concurrent_pages": 6,
-                "pages": [{"page_id": p, "status": "pending", "page_dir": f"pages/{p}"}
-                          for p in ("page_001", "page_002")]}))
-
-            env = dict(_os.environ)
-            env.pop("PADDLE_OCR_TOKEN", None)
-            env["EDITPPT_CONFIG_HOME"] = str(Path(tmp) / "nohome")  # 避免读取本机 token 配置
-            result = _sub.run([sys.executable, str(RUNTIME_DIR / "deck_text_hints.py"), str(run_dir)],
-                              env=env, text=True, capture_output=True)
-            self.assertEqual(0, result.returncode, result.stderr)
-            self.assertIn("backend=builtin-ink", result.stdout)
-            for page_id in ("page_001", "page_002"):
-                hints_path = run_dir / "pages" / page_id / "text_hints.json"
-                self.assertTrue(hints_path.exists())
-                hints = _json.loads(hints_path.read_text())
-                self.assertEqual("builtin-ink", hints["backend"])
-                self.assertTrue(hints["lines"], "fallback detector must report the drawn text")
-                self.assertTrue((run_dir / "pages" / page_id / "text_hints.png").exists())
-
-
 class PaddleScaleTest(unittest.TestCase):
     def test_ocr_coordinates_rescale_to_source_resolution(self):
         from paddle_text_hints import text_blocks_to_lines
@@ -229,32 +191,6 @@ class PaddleScaleTest(unittest.TestCase):
         self.assertAlmostEqual(24, line["glyph_height_px"], delta=2)
         cx = line["box_px"][0] + line["box_px"][2] / 2
         self.assertAlmostEqual(true_box[0] + true_box[2] / 2, cx, delta=10)
-
-
-class SynthesizePdfTest(unittest.TestCase):
-    def test_images_bundle_into_one_pdf_page_per_image(self):
-        import tempfile
-        from deck_text_hints import synthesize_pdf
-        import fitz
-
-        with tempfile.TemporaryDirectory() as tmp:
-            sizes = [(1280, 720), (900, 1200)]
-            page_dirs = []
-            for index, size in enumerate(sizes):
-                page_dir = Path(tmp) / f"page_{index:03d}"
-                page_dir.mkdir()
-                Image.new("RGB", size, "white").save(page_dir / "source.png")
-                page_dirs.append(page_dir)
-            out = Path(tmp) / "bundle.pdf"
-
-            synthesize_pdf(page_dirs, out)
-
-            document = fitz.open(out)
-            self.assertEqual(2, len(document))
-            for page, size in zip(document, sizes):
-                self.assertAlmostEqual(size[0], page.rect.width, delta=1)
-                self.assertAlmostEqual(size[1], page.rect.height, delta=1)
-            document.close()
 
 
 if __name__ == "__main__":

@@ -1,49 +1,75 @@
-# Optional editable-page manifest
+# Shared editable-page manifest
 
-Use this contract only when the deterministic Builder is the best authoring
-route. A Codex task may instead author `page.pptx` with another suitable local
-library.
+Use the shared Builder instead of ad-hoc OOXML or `python-pptx` when the page is
+primarily text, shapes, tables, connectors, and compact images.
 
 ## Minimum document
 
 ```json
 {
-  "slide": {"width": 13.333, "height": 7.5},
+  "slide": {"width": 13.333, "height": 7.5, "background": "#FFFFFF"},
   "source": {"width_px": 1600, "height_px": 900},
   "shapes": [],
   "images": [],
+  "tables": [],
   "text_boxes": []
 }
 ```
 
-Positioned objects may use inches (`left`, `top`, `width`, `height`) or source
-pixel coordinates (`box_px: [x, y, width, height]`). Lines use `points_px` or
-their inch equivalents. The Builder maps source pixels to the declared slide.
+Objects may use inches (`left`, `top`, `width`, `height`) or source pixels
+(`box_px: [x, y, width, height]`). Lines use `points_px: [x1, y1, x2, y2]`.
+`z_index` controls the shared object stack. Shape effects default to none.
 
-## Native objects
-
-- `shapes`: rectangles, rounded rectangles, ellipses, lines, arrows and other
-  supported DrawingML shapes. Use them for containers, bands, timelines and
-  ordinary diagrams.
-- `text_boxes`: editable text with font, size, color, alignment and paragraph
-  properties.
-- `images`: local image assets for logos, photos, maps, screenshots and complex
-  illustrations. Paths resolve relative to the manifest.
-
-The existing Builder accepts additional fields for tables, notes, typography,
-z-order and provenance. Inspect its help or existing examples only when the
-page needs those features.
-
-## Result file
-
-After the PPTX is ready, write:
+## Rich text in one box
 
 ```json
 {
-  "status": "ready",
-  "output_pptx": "page.pptx",
-  "warnings": []
+  "box_px": [80, 50, 1300, 70],
+  "font_size": 26,
+  "font": "PingFang SC",
+  "wrap": "none",
+  "runs": [
+    {"text": "3个月看：", "bold": true, "color": "#0085D0"},
+    {"text": "是否形成完整闭环", "bold": true, "color": "#111111"}
+  ]
 }
 ```
 
-Warnings describe real limitations; they do not activate another workflow.
+Use runs instead of fragmenting one sentence into several independently placed
+text boxes. A source single-line title should use `wrap: "none"` and a measured
+box wide enough to keep one line.
+
+## Native table
+
+```json
+{
+  "box_px": [100, 220, 1400, 420],
+  "column_widths": [1.2, 1, 2.4],
+  "row_heights": [0.8, 1, 1],
+  "font_size": 12,
+  "header_fill": "#0A65B7",
+  "header_color": "#FFFFFF",
+  "fill": "#FFFFFF",
+  "border": "#B7C4D4",
+  "rows": [
+    ["序号", "阶段", "说明"],
+    ["1", "准备", "可编辑单元格"],
+    ["2", "执行", {"text": "重点", "bold": true, "color": "#D92D20"}]
+  ]
+}
+```
+
+Use a native table for real grids. Do not simulate a large data table with
+dozens of unrelated rectangles and text boxes.
+
+## Shapes, connectors, and images
+
+- `shapes`: `rect`, `roundRect`, `ellipse`, `line`, or a supported DrawingML
+  `preset`; use `fill: "none"` and `stroke: "none"` explicitly where needed.
+- `images`: local source-bound paths for logos, photos, maps, screenshots, or
+  complex illustrations. Keep their boxes tight.
+- `text_boxes`: editable text with runs, paragraphs, alignment, vertical
+  alignment, and explicit wrapping.
+
+After `editppt build`, inspect with `editppt render` and `editppt inspect pptx`.
+The manifest draft is not final visual evidence.

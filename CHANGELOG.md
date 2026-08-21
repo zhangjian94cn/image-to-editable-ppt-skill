@@ -6,11 +6,16 @@ Release notes are generated from this file. Keep changelog entries in English.
 
 ### Improvements
 
-- Replace the multi-agent run controller with one Codex task per page and a small optional `editppt` helper surface.
-- Keep OCR, source-bound asset extraction, editable OOXML building, preview rendering, deck assembly, and environment diagnosis without controller state or delivery gates.
+- Add a snapshot-v2 benchmark runner with 4/6/10/17-page suites, per-page evidence reports, command telemetry, and PowerPoint-authoritative candidate renders.
+- Define reconstruction fidelity, single-line title, rich-text run, native table, source-bound asset, and fail-closed PowerPoint render rules in one canonical page prompt and Skill entry.
+- Replace the legacy controller scripts with deterministic `inspect`, `assets`, `build`, `text-fit`, `render`, `compare`, `assemble`, `formula`, and `doctor` tools.
+- Add native DrawingML table authoring, source-pixel crop/background separation, source-space layout/structure hints, PPTX object readback, and PowerPoint-bound visual comparison evidence.
 
 ### Fixes
 
+- Make `editppt render` render the exact `page.pptx` through Microsoft PowerPoint instead of refreshing a manifest sketch.
+- Assemble independent `page.pptx` files with relationship-aware Open XML copying in page order, without requiring page manifests.
+- Label Builder previews as drafts and prefer `rsvg-convert` for reliable audited SVG brand-asset previews.
 - Use the requested DPI when normalizing legacy PPT files through a local PDF conversion.
 - Wrap deterministic editable slide XML in a standards-complete presentation package so generated pages and assembled decks open directly in Microsoft PowerPoint.
 

@@ -296,7 +296,7 @@ def normalize_manifest(manifest):
     normalized["text_boxes"] = [
         fit_text_item(normalize_position_item(normalized, item), normalized) for item in normalized.get("text_boxes", [])
     ]
-    for key in ("images", "shapes"):
+    for key in ("images", "shapes", "tables"):
         normalized[key] = [normalize_position_item(normalized, item) for item in normalized.get(key, [])]
     return normalized
 
@@ -416,6 +416,77 @@ def image_xml(idx, rel_id, item):
       </p:pic>"""
 
 
+def _table_text_xml(value, table, row_index):
+    cell = value if isinstance(value, dict) else {"text": value}
+    text = xml_text(cell.get("text", ""))
+    font_size = int(float(cell.get("font_size", table.get("font_size", 12))) * 100)
+    font = xml_text(cell.get("font", table.get("font", "PingFang SC")))
+    color = hex_color(cell.get("color", table.get("header_color" if row_index == 0 else "color", "#111111")))
+    bold = cell.get("bold", table.get("header_bold", row_index == 0))
+    bold_attr = ' b="1"' if bold else ""
+    align = text_alignment(cell.get("align", table.get("align", "center")))[0]
+    valign = text_vertical_alignment(cell.get("valign", table.get("valign", "middle")))[0]
+    return (
+        f'<a:txBody><a:bodyPr wrap="square" anchor="{valign}" lIns="45720" tIns="22860" rIns="45720" bIns="22860"/>'
+        f'<a:lstStyle/><a:p><a:pPr algn="{align}"/><a:r>'
+        f'<a:rPr lang="zh-CN" sz="{font_size}"{bold_attr}><a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
+        f'<a:latin typeface="{font}"/><a:ea typeface="{font}"/><a:cs typeface="{font}"/></a:rPr>'
+        f'<a:t>{text}</a:t></a:r><a:endParaRPr lang="zh-CN" sz="{font_size}"/></a:p></a:txBody>'
+    )
+
+
+def _table_cell_xml(value, table, row_index):
+    cell = value if isinstance(value, dict) else {}
+    fill = cell.get("fill", table.get("header_fill" if row_index == 0 else "fill", "#FFFFFF"))
+    border = cell.get("border", table.get("border", "#B7C4D4"))
+    border_width = int(float(cell.get("border_width", table.get("border_width", 0.75))) * 12700)
+    border_xml = "".join(
+        f'<a:ln{side} w="{border_width}"><a:solidFill><a:srgbClr val="{hex_color(border)}"/></a:solidFill></a:ln{side}>'
+        for side in ("L", "R", "T", "B")
+    ) if border and border != "none" else "".join(f'<a:ln{side}><a:noFill/></a:ln{side}>' for side in ("L", "R", "T", "B"))
+    fill_xml = shape_fill(fill)
+    return f'<a:tc>{_table_text_xml(value, table, row_index)}<a:tcPr>{fill_xml}{border_xml}</a:tcPr></a:tc>'
+
+
+def table_xml(idx, item):
+    rows = item.get("rows") or []
+    if not rows or not isinstance(rows, list):
+        raise ValueError("table rows must be a non-empty list")
+    column_count = max(len(row) for row in rows)
+    if column_count <= 0:
+        raise ValueError("table requires at least one column")
+    left = emu(item.get("left", 0))
+    top = emu(item.get("top", 0))
+    width = emu(item.get("width", 1))
+    height = emu(item.get("height", 1))
+    column_weights = [float(value) for value in item.get("column_widths", [1] * column_count)]
+    if len(column_weights) != column_count or sum(column_weights) <= 0:
+        raise ValueError("column_widths must match the table column count")
+    grid = [int(width * value / sum(column_weights)) for value in column_weights]
+    grid[-1] += width - sum(grid)
+    row_weights = [float(value) for value in item.get("row_heights", [1] * len(rows))]
+    if len(row_weights) != len(rows) or sum(row_weights) <= 0:
+        raise ValueError("row_heights must match the table row count")
+    row_sizes = [int(height * value / sum(row_weights)) for value in row_weights]
+    row_sizes[-1] += height - sum(row_sizes)
+    grid_xml = "".join(f'<a:gridCol w="{value}"/>' for value in grid)
+    rows_xml = []
+    for row_index, (row, row_height) in enumerate(zip(rows, row_sizes)):
+        values = list(row) + [""] * (column_count - len(row))
+        rows_xml.append(
+            f'<a:tr h="{row_height}">' + "".join(_table_cell_xml(value, item, row_index) for value in values) + '</a:tr>'
+        )
+    name = xml_text(item.get("name", f"Table {idx}"))
+    return f"""
+      <p:graphicFrame>
+        <p:nvGraphicFramePr><p:cNvPr id="{idx}" name="{name}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>
+        <p:xfrm><a:off x="{left}" y="{top}"/><a:ext cx="{width}" cy="{height}"/></p:xfrm>
+        <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">
+          <a:tbl><a:tblPr firstRow="1" bandRow="0"/><a:tblGrid>{grid_xml}</a:tblGrid>{''.join(rows_xml)}</a:tbl>
+        </a:graphicData></a:graphic>
+      </p:graphicFrame>"""
+
+
 def shape_xml(idx, item):
     kind = item.get("type", "rect")
     left = emu(item.get("left", 0))
@@ -511,6 +582,8 @@ def slide_xml(manifest):
         layered.append((float(item.get("z_index", 100)), index, "shape", item, None))
     for rel_index, item in enumerate(manifest.get("images", []), start=1):
         layered.append((float(item.get("z_index", 200)), rel_index, "image", item, f"rId{rel_index + 1}"))
+    for index, item in enumerate(manifest.get("tables", [])):
+        layered.append((float(item.get("z_index", 250)), index, "table", item, None))
     for index, item in enumerate(manifest.get("text_boxes", [])):
         layered.append((float(item.get("z_index", 300)), index, "text", item, None))
 
@@ -519,6 +592,8 @@ def slide_xml(manifest):
             parts.append(shape_xml(next_id, item))
         elif kind == "image":
             parts.append(image_xml(next_id, rel_id, item))
+        elif kind == "table":
+            parts.append(table_xml(next_id, item))
         else:
             parts.append(text_box_xml(next_id, item))
         next_id += 1
@@ -882,15 +957,26 @@ def render_preview(manifest, manifest_path, out_path):
     def open_preview_image(src):
         if src.suffix.lower() != ".svg":
             return Image.open(src).convert("RGBA")
-        convert = "/opt/homebrew/bin/magick"
-        if not Path(convert).exists():
-            convert = "/opt/homebrew/bin/convert"
-        if not Path(convert).exists():
-            print(f"Warning: cannot preview SVG without ImageMagick: {src}", file=sys.stderr)
+        commands = []
+        for command in ("/opt/homebrew/bin/rsvg-convert", "/usr/local/bin/rsvg-convert"):
+            if Path(command).exists():
+                commands.append([command, "-o"])
+        for command in ("/opt/homebrew/bin/magick", "/opt/homebrew/bin/convert"):
+            if Path(command).exists():
+                commands.append([command, str(src)])
+        if not commands:
+            print(f"Warning: cannot draft-preview SVG without rsvg-convert or ImageMagick: {src}", file=sys.stderr)
             return None
         with tempfile.NamedTemporaryFile(suffix=".png") as handle:
-            subprocess.run([convert, str(src), handle.name], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            return Image.open(handle.name).convert("RGBA")
+            errors = []
+            for command in commands:
+                invocation = [*command, handle.name, str(src)] if command[-1] == "-o" else [*command, handle.name]
+                completed = subprocess.run(invocation, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if completed.returncode == 0:
+                    return Image.open(handle.name).convert("RGBA")
+                errors.append(completed.stderr.decode("utf-8", errors="replace")[:200])
+            print(f"Warning: SVG draft preview failed: {'; '.join(errors)}", file=sys.stderr)
+            return None
 
     def render_shape(item):
         box = [item.get("left", 0) * scale, item.get("top", 0) * scale, (item.get("left", 0) + item.get("width", 1)) * scale, (item.get("top", 0) + item.get("height", 1)) * scale]
@@ -1023,11 +1109,58 @@ def render_preview(manifest, manifest_path, out_path):
             return
         draw_content(draw, box_x, box_y)
 
+    def render_table(item):
+        rows = item.get("rows") or []
+        if not rows:
+            return
+        columns = max(len(row) for row in rows)
+        left = int(item.get("left", 0) * scale)
+        top = int(item.get("top", 0) * scale)
+        width = max(1, int(item.get("width", 1) * scale))
+        height = max(1, int(item.get("height", 1) * scale))
+        column_weights = item.get("column_widths") or [1] * columns
+        row_weights = item.get("row_heights") or [1] * len(rows)
+        x_values = [left]
+        for value in column_weights:
+            x_values.append(x_values[-1] + int(width * float(value) / sum(column_weights)))
+        x_values[-1] = left + width
+        y_values = [top]
+        for value in row_weights:
+            y_values.append(y_values[-1] + int(height * float(value) / sum(row_weights)))
+        y_values[-1] = top + height
+        for row_index, row in enumerate(rows):
+            for column_index in range(columns):
+                value = row[column_index] if column_index < len(row) else ""
+                cell = value if isinstance(value, dict) else {"text": value}
+                fill = preview_color(cell.get("fill", item.get("header_fill" if row_index == 0 else "fill", "#FFFFFF")))
+                border = preview_color(cell.get("border", item.get("border", "#B7C4D4")))
+                box = [x_values[column_index], y_values[row_index], x_values[column_index + 1], y_values[row_index + 1]]
+                draw.rectangle(box, fill=fill, outline=border)
+                text = str(cell.get("text", ""))
+                size = max(1, int(float(cell.get("font_size", item.get("font_size", 12))) * scale / 72))
+                font_path = choose_preview_font(cell.get("preview_font") or item.get("preview_font"))
+                try:
+                    font = ImageFont.truetype(font_path, size=size) if font_path else ImageFont.load_default()
+                except Exception:
+                    font = ImageFont.load_default()
+                bounds = draw.multiline_textbbox((0, 0), text, font=font, align="center")
+                text_width = bounds[2] - bounds[0]
+                text_height = bounds[3] - bounds[1]
+                draw.multiline_text(
+                    ((box[0] + box[2] - text_width) / 2, (box[1] + box[3] - text_height) / 2),
+                    text,
+                    font=font,
+                    fill=preview_color(cell.get("color", item.get("header_color" if row_index == 0 else "color", "#111111"))),
+                    align="center",
+                )
+
     layered = []
     for index, item in enumerate(manifest.get("shapes", [])):
         layered.append((float(item.get("z_index", 100)), index, render_shape, item))
     for index, item in enumerate(manifest.get("images", [])):
         layered.append((float(item.get("z_index", 200)), index, render_image, item))
+    for index, item in enumerate(manifest.get("tables", [])):
+        layered.append((float(item.get("z_index", 250)), index, render_table, item))
     for index, item in enumerate(manifest.get("text_boxes", [])):
         layered.append((float(item.get("z_index", 300)), index, render_text, item))
     for _z_index, _order, renderer, item in sorted(layered, key=lambda entry: (entry[0], entry[1])):

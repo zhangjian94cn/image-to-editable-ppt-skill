@@ -15,6 +15,10 @@ from PIL import Image
 
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 PPT_EXTS = {".ppt", ".pptx"}
+WIDE_SLIDE = {"width": 13.333, "height": 7.5, "size_mode": "wide"}
+PX_PER_INCH = 96
+ASPECT_16_9 = 16 / 9
+ASPECT_TOLERANCE = 0.03
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 NS = {
     "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
@@ -22,6 +26,37 @@ NS = {
     "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
     "rel": REL_NS,
 }
+
+
+def slide_for_source(width_px, height_px):
+    if not width_px or not height_px:
+        raise ValueError("source dimensions must be positive")
+    if abs((width_px / height_px) / ASPECT_16_9 - 1) <= ASPECT_TOLERANCE:
+        return dict(WIDE_SLIDE)
+    return {
+        "width": width_px / PX_PER_INCH,
+        "height": height_px / PX_PER_INCH,
+        "size_mode": "source",
+        "px_per_inch": PX_PER_INCH,
+    }
+
+
+def fit_content_box(width_px, height_px, slide):
+    slide_width = float(slide["width"])
+    slide_height = float(slide["height"])
+    source_aspect = width_px / height_px
+    slide_aspect = slide_width / slide_height
+    if source_aspect >= slide_aspect:
+        width = slide_width
+        height = width / source_aspect
+        left = 0
+        top = (slide_height - height) / 2
+    else:
+        height = slide_height
+        width = height * source_aspect
+        left = (slide_width - width) / 2
+        top = 0
+    return {"left": left, "top": top, "width": width, "height": height, "fit": "contain"}
 
 
 def sha256_text(value):

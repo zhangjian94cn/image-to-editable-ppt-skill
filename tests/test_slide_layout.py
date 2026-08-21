@@ -19,7 +19,7 @@ from build_pptx_from_manifest import (  # noqa: E402
     slide_size_type,
     text_box_xml,
 )
-from prepare_deck_run import fit_content_box, slide_for_source  # noqa: E402
+from _input_normalization import fit_content_box, slide_for_source  # noqa: E402
 
 
 def scalable_test_font():

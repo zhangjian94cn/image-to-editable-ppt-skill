@@ -11,7 +11,7 @@
 ```text
 使用 $image-to-editable-ppt，将 source.png 重建为一页对象级可编辑的 PowerPoint。
 
-你可以自主使用 Skill 提供的 OCR、素材提取、PPT 构建和预览工具。
+你可以自主使用 Skill 提供的 OCR、素材提取、PPT 构建和 PowerPoint 真实渲染工具。
 不要把整张 source.png 作为全页背景或全页覆盖图片。
 请在当前页面目录生成 page.pptx，并在完成后写出 result.json。
 ```
@@ -23,8 +23,8 @@
 ```text
 source.png
 page.pptx
+preview.png   # Microsoft PowerPoint 对 page.pptx 的真实渲染
 result.json
-preview.png   # 可选
 ```
 
 `result.json`：
@@ -43,11 +43,14 @@ preview.png   # 可选
 
 ```bash
 editppt prepare <input...>
-editppt inspect <page-dir>
-editppt extract-assets --input <image> --out-dir <dir>
+editppt inspect text|layout|structure|pptx ...
+editppt assets crop|separate|split-alpha|remove-chroma|brand ...
 editppt build <page-dir>
+editppt text-fit ...
 editppt render <page-dir>
+editppt compare <page-dir>
 editppt assemble <page-dir...> --out <deck.pptx>
+editppt formula render-latex ...
 editppt doctor --json
 ```
 
@@ -62,13 +65,9 @@ editppt doctor --json
 python -m unittest discover -s tests -v
 ```
 
-PaddleOCR token 是可选增强：
-
-```bash
-editppt config --paddle-ocr-token "<token>"
-```
-
-缺少 OCR 或图片后端时，Codex仍可使用原生文本、形状、表格和连接线工具完成页面；这些辅助能力不应阻断整个任务。
+PaddleOCR token 是可选增强，可通过 `PADDLE_OCR_TOKEN` 或本机既有
+`~/.editppt/config.yaml` 提供。缺少 OCR 时会明确标记为几何提示；但缺少
+Microsoft PowerPoint 或真实渲染失败时不得写 `ready`。
 
 ## 可复用素材
 
@@ -79,5 +78,6 @@ editppt config --paddle-ocr-token "<token>"
 - 本 Skill 用于从视觉页面重建可编辑 PPT，不用于从文章或大纲创建全新演示文稿。
 - 文字、数字、表格、普通容器、时间轴与结构关系优先使用原生对象。
 - 复杂视觉元素可保留为独立局部素材。
-- 预览和诊断是 Codex 自主选择的辅助，不是调用方的下载门禁。
+- Microsoft PowerPoint 真实渲染是 Codex 写 `ready` 前的必要自检；诊断指标
+  仍不是调用方的下载门禁。
 - 最终质量通过 Skill、工具和真实样例持续优化，不通过扩张工作台编排实现。
