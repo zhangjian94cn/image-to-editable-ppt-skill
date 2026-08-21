@@ -25,6 +25,8 @@ not a product workflow contract.
 
 1. Inspect `source.png` and decide the semantic groups and visual hierarchy.
 2. Use `editppt inspect` when OCR or measured text boxes would improve accuracy.
+   Treat OCR as an advisory inventory: reconcile it with your own visual reading
+   so a missed OCR block does not become a missing slide section.
 3. Choose native PowerPoint text, shapes, tables, and connectors wherever they
    are reasonably editable. Keep photos, logos, maps, screenshots, and complex
    illustrations as separate source-bound image objects when native rebuilding
@@ -38,8 +40,9 @@ not a product workflow contract.
    logo, are listed in `assets/brand-catalog.json`; use them only when the
    source page actually contains that brand.
 6. Continue until `page.pptx` is the best editable reconstruction you can make,
-   then write `result.json`. Do not emit controller decisions or wait for an
-   external quality gate.
+   then compare the whole source and preview by major regions (header, body
+   columns or panels, result band, footer) before writing `result.json`. Do not
+   emit controller decisions or wait for an external quality gate.
 
 ## Non-Negotiable Output Rules
 

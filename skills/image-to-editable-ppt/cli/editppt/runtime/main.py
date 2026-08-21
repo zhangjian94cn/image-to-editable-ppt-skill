@@ -19,6 +19,7 @@ from pathlib import Path
 from _input_normalization import normalize_inputs
 from build_pptx_from_manifest import render_preview
 from formula_renderer import FormulaRenderError, render_latex_asset
+from runtime_env import config_path, read_config_file
 
 
 RUNTIME_DIR = Path(__file__).resolve().parent
@@ -26,11 +27,17 @@ SKILL_ROOT = RUNTIME_DIR.parents[2]
 HELP = argparse.RawDescriptionHelpFormatter
 
 
-def _script(name: str, *argv: object, capture: bool = False) -> subprocess.CompletedProcess[str]:
+def _script(
+    name: str,
+    *argv: object,
+    capture: bool = False,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(RUNTIME_DIR / name), *[str(value) for value in argv]],
         text=True,
         capture_output=capture,
+        env=env,
     )
 
 
@@ -47,6 +54,16 @@ def _write_json(path: Path, value: dict) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def _configured_paddle_token() -> str:
+    token = os.environ.get("PADDLE_OCR_TOKEN", "").strip()
+    if token:
+        return token
+    try:
+        return str(read_config_file(config_path()).get("PADDLE_OCR_TOKEN", "")).strip()
+    except (OSError, SystemExit):
+        return ""
 
 
 def cmd_prepare(args: argparse.Namespace) -> int:
@@ -73,7 +90,21 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         command += ["--overlay", args.overlay]
     else:
         command += ["--overlay", ""]
-    completed = _script("text_hints.py", *command, capture=True)
+    token = _configured_paddle_token()
+    completed: subprocess.CompletedProcess[str]
+    if token:
+        child_env = os.environ.copy()
+        child_env["PADDLE_OCR_TOKEN"] = token
+        completed = _script("paddle_text_hints.py", *command, capture=True, env=child_env)
+        if completed.returncode != 0:
+            reason = (completed.stderr or completed.stdout or "unknown OCR error").strip()
+            print(
+                f"content-aware OCR unavailable ({reason[:240]}); using local geometric hints",
+                file=sys.stderr,
+            )
+            completed = _script("text_hints.py", *command, capture=True)
+    else:
+        completed = _script("text_hints.py", *command, capture=True)
     if completed.returncode != 0:
         if completed.stdout:
             print(completed.stdout, end="")

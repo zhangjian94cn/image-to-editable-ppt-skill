@@ -5,12 +5,17 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / "skills/image-to-editable-ppt/cli/editppt/runtime/main.py"
+sys.path.insert(0, str(RUNTIME.parent))
+import main as runtime_main  # noqa: E402
+sys.path.pop(0)
 
 
 def run_cli(*args: object) -> subprocess.CompletedProcess[str]:
@@ -102,6 +107,34 @@ class SimpleCliTest(unittest.TestCase):
         self.assertEqual(0, completed.returncode, completed.stderr)
         payload = json.loads(completed.stdout)
         self.assertEqual("simple-codex-page-v1", payload["skill"]["contract_version"])
+
+    def test_inspect_uses_configured_content_aware_ocr_without_exposing_token(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            page = Path(temporary)
+            Image.new("RGB", (160, 90), "white").save(page / "source.png")
+            calls: list[tuple[str, dict[str, str] | None]] = []
+
+            def fake_script(name: str, *argv: object, capture: bool = False, env=None):
+                calls.append((name, env))
+                (page / "text_hints.json").write_text(
+                    json.dumps({"backend": "paddleocr-vl", "lines": []}),
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess([], 0, "", "")
+
+            args = SimpleNamespace(
+                page_dir=page,
+                source="source.png",
+                out="text_hints.json",
+                overlay="text_hints.png",
+            )
+            with mock.patch.object(runtime_main, "_configured_paddle_token", return_value="secret-value"), mock.patch.object(
+                runtime_main, "_script", side_effect=fake_script
+            ):
+                self.assertEqual(0, runtime_main.cmd_inspect(args))
+
+            self.assertEqual("paddle_text_hints.py", calls[0][0])
+            self.assertEqual("secret-value", calls[0][1]["PADDLE_OCR_TOKEN"])
 
 
 if __name__ == "__main__":

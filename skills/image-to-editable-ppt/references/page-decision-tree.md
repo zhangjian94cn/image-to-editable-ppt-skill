@@ -34,6 +34,10 @@ dashboard or simple diagram merely to finish faster.
 - Preserve source wording, numbers, punctuation and Chinese list numbering.
 - Use measured OCR boxes as evidence; merge fragmented lines when they form one
   paragraph.
+- Build a small region inventory before authoring dense pages. Count the major
+  columns, panels, stages, tables and footer bands visible in the source, then
+  make sure each region is represented in the editable result. OCR may miss an
+  entire low-contrast or visually dense region.
 - Match font family where available and use a visually compatible local font
   when it is not.
 - Prefer readable line breaks and stable text boxes over forcing exact OCR
