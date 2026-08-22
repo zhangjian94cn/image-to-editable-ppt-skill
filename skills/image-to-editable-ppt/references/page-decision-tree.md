@@ -32,6 +32,9 @@ dashboard or simple diagram merely to finish faster.
 ## Text and layout
 
 - Preserve source wording, numbers, punctuation and Chinese list numbering.
+- Include visible footers, legal lines, page numbers, units, and small captions
+  in the inventory. Reinspect the source instead of inventing or shortening
+  low-contrast text.
 - Use measured OCR boxes as evidence; merge fragmented lines when they form one
   paragraph.
 - Build a small region inventory before authoring dense pages. Count the major

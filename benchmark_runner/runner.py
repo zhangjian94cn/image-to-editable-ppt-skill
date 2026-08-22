@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageFilter
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
@@ -476,9 +476,21 @@ def _visual_metrics(source_path: Path, candidate_path: Path, compare_dir: Path) 
     coarse = float(np.abs(first - second).mean() / 255.0)
     source_gray = np.asarray(source.convert("L"), dtype=np.int16)
     candidate_gray = np.asarray(candidate.convert("L"), dtype=np.int16)
-    source_ink = source_gray < 235
-    candidate_ink = candidate_gray < 235
-    ink_loss = float(np.logical_xor(source_ink, candidate_ink).mean())
+    # Treat only meaningful dark/color content as ink.  Very light swimlane
+    # bands and shadows are visual styling, not missing semantic content.
+    source_ink = source_gray < 210
+    candidate_ink = candidate_gray < 210
+    # A two-pixel tolerance removes anti-aliasing and tiny font-rendering
+    # shifts while still exposing missing labels, lines, and regions.
+    source_near = np.asarray(
+        Image.fromarray((source_ink * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(5))
+    ) > 0
+    candidate_near = np.asarray(
+        Image.fromarray((candidate_ink * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(5))
+    ) > 0
+    ink_loss = float(
+        np.logical_or(source_ink & ~candidate_near, candidate_ink & ~source_near).mean()
+    )
     difference = ImageChops.difference(source, candidate)
     difference.save(compare_dir / "diff.png")
     heat = np.asarray(difference.convert("L"), dtype=np.uint8)
@@ -615,9 +627,11 @@ def _issues(
         issues.append({"severity": "P2", "category": "visual", "message": f"存在可见样式或几何差异（RGB {coarse:.3f} / ink {ink:.3f}）"})
     if any(item["severity"] == "P0" for item in issues):
         return "reject", issues
-    if not issues:
-        return "acceptable", issues
-    return "needs_work", issues
+    if any(item["severity"] == "P1" for item in issues):
+        return "needs_work", issues
+    # P2 records reviewable decoration/style differences without rejecting a
+    # business-usable editable page.  Final baseline promotion is still human.
+    return "acceptable", issues
 
 
 def _seconds(value: float | None) -> str:

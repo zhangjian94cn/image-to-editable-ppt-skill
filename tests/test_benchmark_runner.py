@@ -17,6 +17,7 @@ from benchmark_runner.runner import (
     _pptx_metrics,
     _resolve_cases,
     _skill_trace,
+    _visual_metrics,
 )
 
 
@@ -101,6 +102,34 @@ def test_text_coverage_reports_exact_visible_missing_text(tmp_path: Path):
 
     assert metrics["text_coverage"] == 0.0
     assert metrics["missing_texts"] == ["不能遗漏的版权句"]
+
+
+def test_visual_ink_metric_ignores_light_background_style_changes(tmp_path: Path):
+    source = tmp_path / "source.png"
+    candidate = tmp_path / "candidate.png"
+    Image.new("RGB", (200, 100), (225, 225, 225)).save(source)
+    Image.new("RGB", (200, 100), "white").save(candidate)
+
+    metrics = _visual_metrics(source, candidate, tmp_path / "compare")
+
+    assert metrics["content_ink_loss"] == 0.0
+    assert metrics["coarse_rgb_loss"] > 0.0
+
+
+def test_p2_visual_difference_remains_acceptable_for_human_review():
+    metrics = {
+        "codex_powerpoint_rendered": True,
+        "text_coverage": 1.0,
+        "max_picture_coverage": 0.1,
+        "out_of_bounds_count": 0,
+        "coarse_rgb_loss": 0.05,
+        "content_ink_loss": 0.02,
+    }
+
+    verdict, issues = _issues(metrics)
+
+    assert verdict == "acceptable"
+    assert [value["severity"] for value in issues] == ["P2"]
 
 
 def test_direct_powerpoint_automation_is_rejected():

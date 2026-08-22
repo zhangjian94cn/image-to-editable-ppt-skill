@@ -1308,8 +1308,9 @@ def render_preview(manifest, manifest_path, out_path):
                 text_y = origin_y
             return text_x, text_y
 
-        run_specs = []
+        run_lines = []
         if item.get("runs"):
+            run_lines = [[]]
             cursor_x = 0
             base_size = size
             for run in item["runs"]:
@@ -1322,21 +1323,55 @@ def render_preview(manifest, manifest_path, out_path):
                 run_fill = preview_color(run.get("color", item.get("color", "#111111")))
                 baseline = float(run.get("baseline", 0) or 0)
                 run_y = int(-baseline / 100000 * base_size)
-                run_text = str(run.get("text", ""))
-                run_specs.append((cursor_x, run_y, run_text, run_fill, run_font, run_font.getbbox(run_text)))
-                cursor_x += int(round(draw.textlength(run_text, font=run_font)))
+                fragments = str(run.get("text", "")).split("\n")
+                for fragment_index, fragment in enumerate(fragments):
+                    if fragment:
+                        run_lines[-1].append(
+                            (cursor_x, run_y, fragment, run_fill, run_font, run_font.getbbox(fragment))
+                        )
+                        cursor_x += int(round(draw.textlength(fragment, font=run_font)))
+                    if fragment_index < len(fragments) - 1:
+                        run_lines.append([])
+                        cursor_x = 0
 
         def draw_content(target_draw, origin_x, origin_y):
-            if run_specs:
-                bounds = (
-                    min(spec[0] + spec[5][0] for spec in run_specs),
-                    min(spec[1] + spec[5][1] for spec in run_specs),
-                    max(spec[0] + spec[5][2] for spec in run_specs),
-                    max(spec[1] + spec[5][3] for spec in run_specs),
-                )
-                text_x, text_y = aligned_origin(bounds, origin_x, origin_y)
-                for run_x, run_y, run_text, run_fill, run_font, _run_bounds in run_specs:
-                    target_draw.text((text_x + run_x, text_y + run_y), run_text, fill=run_fill, font=run_font)
+            if run_lines:
+                line_metrics = []
+                for line in run_lines:
+                    if line:
+                        bounds = (
+                            min(spec[0] + spec[5][0] for spec in line),
+                            min(spec[1] + spec[5][1] for spec in line),
+                            max(spec[0] + spec[5][2] for spec in line),
+                            max(spec[1] + spec[5][3] for spec in line),
+                        )
+                    else:
+                        bounds = (0, 0, 0, base_size)
+                    line_metrics.append((line, bounds, max(1, bounds[3] - bounds[1])))
+                spacing = 4
+                block_height = sum(value[2] for value in line_metrics) + spacing * max(0, len(line_metrics) - 1)
+                if valign == "middle":
+                    line_y = origin_y + (box_height - block_height) // 2
+                elif valign == "bottom":
+                    line_y = origin_y + box_height - block_height
+                else:
+                    line_y = origin_y
+                for line, bounds, line_height in line_metrics:
+                    line_width = bounds[2] - bounds[0]
+                    if align == "center":
+                        line_x = origin_x + (box_width - line_width) // 2 - bounds[0]
+                    elif align == "right":
+                        line_x = origin_x + box_width - line_width - bounds[0]
+                    else:
+                        line_x = origin_x - bounds[0]
+                    for run_x, run_y, run_text, run_fill, run_font, _run_bounds in line:
+                        target_draw.text(
+                            (line_x + run_x, line_y + run_y - bounds[1]),
+                            run_text,
+                            fill=run_fill,
+                            font=run_font,
+                        )
+                    line_y += line_height + spacing
                 return
             bounds = target_draw.multiline_textbbox((0, 0), preview_text, font=font, spacing=4, align=align)
             text_x, text_y = aligned_origin(bounds, origin_x, origin_y)

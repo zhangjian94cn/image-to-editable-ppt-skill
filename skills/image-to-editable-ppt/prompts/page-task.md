@@ -6,7 +6,10 @@ checkout and its `editppt` commands are authoritative for this task.
 
 The source is authoritative: preserve its exact wording, numbers, information
 groups, relative geometry, visual hierarchy, and aspect ratio. First view the
-whole image and inventory the major regions. You may use the Skill's OCR,
+whole image and inventory the major regions, including the footer and page
+number. Preserve small legal lines, captions, units, punctuation, and numbered
+steps verbatim; do not shorten or paraphrase text that is difficult to read.
+You may use the Skill's OCR,
 layout, structure, source-pixel asset, Builder, text-fit, PowerPoint render,
 PPTX inspection, and comparison tools.
 

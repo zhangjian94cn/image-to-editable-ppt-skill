@@ -255,6 +255,36 @@ class SlideLayoutTest(unittest.TestCase):
         self.assertAlmostEqual(100, ink_center_x, delta=8)
         self.assertAlmostEqual(100, ink_center_y, delta=8)
 
+    def test_preview_supports_newlines_inside_rich_text_runs(self):
+        preview_font = scalable_test_font()
+        self.assertIsNotNone(preview_font)
+        manifest = {
+            "source": {"width_px": 200, "height_px": 200},
+            "slide": {"width": 2, "height": 2, "background": "#ffffff"},
+            "content_box": {"left": 0, "top": 0, "width": 2, "height": 2},
+            "preview_scale": 100,
+            "text_boxes": [
+                {
+                    "runs": [
+                        {"text": "First\n", "color": "#003366"},
+                        {"text": "Second", "bold": True, "color": "#660000"},
+                    ],
+                    "box_px": [20, 20, 160, 160],
+                    "font_size": 24,
+                    "fit_text": False,
+                    "preview_font": preview_font,
+                    "align": "center",
+                    "valign": "middle",
+                }
+            ],
+        }
+
+        ink_center = preview_ink_center(manifest)
+
+        self.assertIsNotNone(ink_center)
+        self.assertAlmostEqual(100, ink_center[0], delta=15)
+        self.assertAlmostEqual(100, ink_center[1], delta=15)
+
     def test_preview_rotates_centered_text_around_the_box_center(self):
         manifest = {
             "source": {"width_px": 200, "height_px": 200},
