@@ -24,13 +24,14 @@ ready result. Keep the evidence and fail clearly.
 
 ## Method
 
-1. View the whole source and write a short inventory of its major regions
-   before authoring. OCR is text and coordinate evidence, never a substitute
-   for whole-page observation.
+1. View the whole source and the portable overlapping detail images attached
+   to the task. Write `source-transcript.json` with verbatim visible lines and
+   source boxes before authoring. OCR is optional second-opinion evidence,
+   never a substitute for multimodal source observation.
    `source.png` is already prepared in the canonical authoring coordinate
    space. Read its reported dimensions and use them directly; do not rescale a
    completed manifest to compensate for the chat/image preview size.
-2. Use `editppt inspect text|layout|structure` when measured evidence helps.
+2. Use `editppt inspect vision|text|layout|structure` when measured evidence helps.
    Reconcile every hint with the visible source. `inspect text` also writes an
    enlarged high-contrast footer strip; view it whenever the source has small
    legal text, a page number, units, or a pale footer.
@@ -43,8 +44,8 @@ ready result. Keep the evidence and fail clearly.
    helpers; do not reimplement font fitting, tables, connectors, or OOXML
    packaging with ad-hoc `python-pptx` code.
 5. Build `page.pptx`, run `editppt render`, and actually view `preview.png`.
-   Always run `editppt inspect pptx` after authoring; when `text_hints.json`
-   exists it reports advisory source-text omissions near their original
+   Always run `editppt inspect pptx --text-hints source-transcript.json` after
+   authoring; it reports advisory source-text omissions near their original
    regions. Use `editppt compare` when the remaining discrepancy is not
    obvious. Repair specific visible omissions, overlaps, overflow, unexpected
    wrapping, or misalignment, then render the new file again.
@@ -103,7 +104,7 @@ for commands. The canonical task prompt is [prompts/page-task.md](prompts/page-t
 
 ```bash
 editppt prepare <input...>
-editppt inspect text|layout|structure|pptx ...
+editppt inspect vision|text|layout|structure|pptx ...
 editppt assets crop|separate|split-alpha|remove-chroma|brand ...
 editppt build <page-dir>
 editppt text-fit ...

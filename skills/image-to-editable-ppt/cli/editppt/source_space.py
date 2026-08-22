@@ -1,10 +1,8 @@
 """Stable authoring coordinates for visual slide reconstruction.
 
-Codex image input is capped at 2048 pixels on the long edge.  Feeding a
-larger source directly to the model while asking it to author in the original
-pixel coordinates creates an invisible scale mismatch.  This module prepares
-a deterministic view image for authoring and retains the original pixels for
-asset extraction.
+One stable authoring view keeps geometry consistent across models and hosts.
+Portable overlapping detail images preserve small-text readability, while
+this module retains the original pixels for lossless asset extraction.
 """
 
 from __future__ import annotations

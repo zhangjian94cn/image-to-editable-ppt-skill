@@ -33,6 +33,7 @@ from source_inspect import inspect_layout, inspect_structure
 from text_fit_tool import measure as measure_text
 from text_fit_tool import write_result as write_text_fit
 from editppt.text_evidence import normalize_text
+from editppt.visual_inputs import prepare_visual_inputs
 
 
 RUNTIME_DIR = Path(__file__).resolve().parent
@@ -233,6 +234,27 @@ def cmd_inspect_text(args: argparse.Namespace) -> int:
         "detail_images": hints.get("detail_images", []),
         "footer_detail_added_lines": int(hints.get("footer_detail_added_lines") or 0),
         "line_count": len(lines),
+    })
+    return 0
+
+
+def cmd_inspect_vision(args: argparse.Namespace) -> int:
+    try:
+        payload = prepare_visual_inputs(
+            args.page_dir,
+            source_name=args.source,
+            output_dir=args.out_dir,
+            target_edge=args.target_edge,
+            overlap_ratio=args.overlap_ratio,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    _print_json({
+        "status": "ready",
+        "provider": payload["provider"],
+        "manifest": payload["manifest"],
+        "images": [value["path"] for value in payload["images"]],
     })
     return 0
 
@@ -489,6 +511,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run a second OCR pass on an enlarged high-contrast footer strip when content-aware OCR is available.",
     )
     inspect_text.set_defaults(func=cmd_inspect_text)
+    inspect_vision = inspect_sub.add_parser(
+        "vision",
+        help="Create portable overlapping detail images for the page's multimodal Codex task.",
+    )
+    inspect_vision.add_argument("page_dir")
+    inspect_vision.add_argument("--source", default="source.png")
+    inspect_vision.add_argument("--out-dir", default=str(Path(".editppt/vision-inputs")))
+    inspect_vision.add_argument("--target-edge", type=int, default=1792)
+    inspect_vision.add_argument("--overlap-ratio", type=float, default=0.08)
+    inspect_vision.set_defaults(func=cmd_inspect_vision)
     inspect_layout_parser = inspect_sub.add_parser("layout", help="Measure broad content and whitespace bands.")
     inspect_layout_parser.add_argument("page_dir")
     inspect_layout_parser.add_argument("--source", default="source.png")

@@ -9,12 +9,39 @@ groups, relative geometry, visual hierarchy, and aspect ratio. First view the
 whole image and inventory the major regions, including the footer and page
 number. Preserve small legal lines, captions, units, punctuation, and numbered
 steps verbatim; do not shorten or paraphrase text that is difficult to read.
+`source.png` plus the overlapping detail images listed in
+`.editppt/vision-inputs/vision-inputs.json` are attached to this same task.
+They are different views of the same slide, not additional slides. Use the
+detail views to read small and dense text exactly and map it back through each
+entry's `source_box_px`.
+
+Before authoring, write `source-transcript.json` with this minimal public
+evidence contract:
+
+```json
+{
+  "schema_version": 1,
+  "backend": "codex-multimodal",
+  "source": {"width_px": 1600, "height_px": 900},
+  "lines": [
+    {"id": "T001", "text": "visible text verbatim", "box_px": [0, 0, 100, 20], "certainty": "high"}
+  ],
+  "uncertain": []
+}
+```
+
+Record every visible line you can read, character-for-character. Never use
+plausible completion or paraphrasing. Put genuinely unreadable fragments in
+`uncertain` instead of inventing text. Treat OCR output only as a second
+opinion against this multimodal transcript.
+
 You may use the Skill's OCR,
 layout, structure, source-pixel asset, Builder, text-fit, PowerPoint render,
 PPTX inspection, and comparison tools.
-After `editppt inspect text .`, view every path in `detail_images` when the
-source contains faint or small footer text. Before finalizing, run
-`editppt inspect pptx .`; read `text_evidence.missing_texts` and either restore
+After `editppt inspect text .`, compare its hints with
+`source-transcript.json`. Before finalizing, run
+`editppt inspect pptx . --text-hints source-transcript.json`; read
+`text_evidence.missing_texts` and either restore
 each visible source line or explicitly verify that the OCR hint is wrong.
 
 `source.png` has already been normalized to the canonical authoring coordinate

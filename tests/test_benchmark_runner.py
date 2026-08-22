@@ -303,6 +303,15 @@ def test_benchmark_codex_has_host_access_for_powerpoint(tmp_path: Path):
     assert command[command.index("-s") + 1] == "danger-full-access"
 
 
+def test_benchmark_codex_attaches_portable_detail_images(tmp_path: Path):
+    args = Namespace(codex_bin="/usr/bin/true", profile="image-to-ppt-agent", model="", effort="")
+    source = tmp_path / "source.png"
+    details = [tmp_path / "detail-1.png", tmp_path / "detail-2.png"]
+    command = _codex_command(args, tmp_path, source, details)
+    attached = [command[index + 1] for index, value in enumerate(command) if value == "--image"]
+    assert attached == [str(source), str(details[0]), str(details[1])]
+
+
 def test_skill_trace_reads_runner_and_page_local_files(tmp_path: Path):
     runner_trace = tmp_path / "telemetry.jsonl"
     page_trace = tmp_path / "editppt-events.jsonl"

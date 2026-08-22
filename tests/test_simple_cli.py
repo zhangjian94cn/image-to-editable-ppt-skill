@@ -80,6 +80,24 @@ class SimpleCliTest(unittest.TestCase):
             assert "validation" not in json.dumps(payload)
             assert payload["pages"][0]["result"].endswith("result.json")
 
+    def test_inspect_vision_writes_portable_overlapping_details(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            page = Path(temporary)
+            Image.new("RGB", (1600, 900), "white").save(page / "source.png")
+            completed = run_cli("inspect", "vision", page)
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual("deterministic-source-crops", payload["provider"])
+            self.assertEqual(7, len(payload["images"]))
+            manifest_path = Path(payload["manifest"])
+            self.assertTrue(manifest_path.is_file())
+            manifest_payload = json.loads(manifest_path.read_text())
+            self.assertEqual([1600, 900], manifest_payload["source_size_px"])
+            self.assertEqual("detail-footer-c3", manifest_payload["images"][-1]["id"])
+            for item in manifest_payload["images"]:
+                self.assertTrue((page / item["path"]).is_file())
+                self.assertEqual(64, len(item["sha256"]))
+
     def test_prepare_uses_stable_authoring_space_and_crop_restores_original_pixels(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

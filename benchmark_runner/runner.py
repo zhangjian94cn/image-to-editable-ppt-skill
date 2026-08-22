@@ -35,6 +35,7 @@ if str(CLI_ROOT) not in sys.path:
 
 from editppt.source_space import prepare_authoring_source
 from editppt.text_evidence import normalize_text, paragraph_segments, region_text_coverage
+from editppt.visual_inputs import prepare_visual_inputs, visual_input_paths
 
 
 ROOT_FILES = {"source.png", "candidate.pptx", "candidate.png", "report.md", "artifacts"}
@@ -277,7 +278,12 @@ Generate page.pptx and then write result.json with status=ready and output_pptx=
 """
 
 
-def _codex_command(args: argparse.Namespace, work: Path, source: Path) -> list[str]:
+def _codex_command(
+    args: argparse.Namespace,
+    work: Path,
+    source: Path,
+    detail_images: Iterable[Path] = (),
+) -> list[str]:
     codex = shutil.which(args.codex_bin) if not Path(args.codex_bin).is_file() else args.codex_bin
     if not codex:
         raise BenchmarkError(f"Codex CLI is unavailable: {args.codex_bin}")
@@ -289,8 +295,11 @@ def _codex_command(args: argparse.Namespace, work: Path, source: Path) -> list[s
         command += ["-m", args.model]
     if args.effort:
         command += ["-c", f'model_reasoning_effort="{args.effort}"']
+    command += ["--image", str(source)]
+    for detail in detail_images:
+        command += ["--image", str(detail)]
     command += [
-        "--image", str(source), "--output-last-message",
+        "--output-last-message",
         str(work.parent.parent / "codex" / "last-message.txt"), "-",
     ]
     return command
@@ -300,7 +309,8 @@ def _execute_codex(
     args: argparse.Namespace, skill_root: Path, work: Path, codex_dir: Path,
 ) -> tuple[int, float, str]:
     source = work / "source.png"
-    command = _codex_command(args, work, source)
+    prepare_visual_inputs(work)
+    command = _codex_command(args, work, source, visual_input_paths(work))
     codex_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["MIAOBI_SKILL_ROOT"] = str(skill_root)
@@ -595,6 +605,12 @@ def _issues(
             "category": "execution",
             "message": "Codex 未留下与最终 page.pptx SHA 绑定的 editppt render 证据",
         })
+    if metrics.get("source_transcript_present") is False:
+        issues.append({
+            "severity": "P1",
+            "category": "execution",
+            "message": "Codex 未写出基于本轮多图输入的 source-transcript.json",
+        })
     forbidden = [value.command for value in commands if DIRECT_POWERPOINT_PATTERN.search(value.command)]
     if forbidden:
         issues.append({
@@ -690,6 +706,8 @@ def _report(
         "object_count", "text_shape_count", "native_shape_count", "table_count",
         "picture_count", "max_picture_coverage", "text_coverage", "missing_text_count",
         "excluded_expected_text_count",
+        "multimodal_image_count", "source_transcript_present",
+        "source_transcript_line_count", "source_transcript_uncertain_count",
         "coarse_rgb_loss", "content_ink_loss", "out_of_bounds_count",
         "codex_powerpoint_rendered",
     ):
@@ -779,6 +797,15 @@ def _run_page(
         if returncode != 0:
             raise BenchmarkError(f"Codex exited {returncode}: {stderr[-1000:]}")
         result = _read_json(work / "result.json")
+        transcript = _read_json(work / "source-transcript.json")
+        transcript_lines = transcript.get("lines") if isinstance(transcript.get("lines"), list) else []
+        transcript_uncertain = transcript.get("uncertain") if isinstance(transcript.get("uncertain"), list) else []
+        outcome.metrics.update({
+            "multimodal_image_count": 1 + len(visual_input_paths(work)),
+            "source_transcript_present": bool(transcript_lines),
+            "source_transcript_line_count": len(transcript_lines),
+            "source_transcript_uncertain_count": len(transcript_uncertain),
+        })
         candidate = work / str(result.get("output_pptx") or "page.pptx")
         if result.get("status") != "ready" or not candidate.is_file() or candidate.stat().st_size == 0:
             raise BenchmarkError("Codex did not produce ready result.json and a non-empty page.pptx")

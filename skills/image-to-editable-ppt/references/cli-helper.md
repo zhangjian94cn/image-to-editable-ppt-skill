@@ -16,12 +16,17 @@ Normalizes images, PDFs, or visual PPTX files into ordered page directories.
 ## Inspect
 
 ```bash
+editppt inspect vision /page
 editppt inspect text /page
 editppt inspect layout /page
 editppt inspect structure /page
 editppt inspect pptx /page --input page.pptx
 ```
 
+- `vision`: four overlapping source-pixel detail views plus three footer detail
+  view for the same multimodal Codex task. Its JSON maps every crop back to
+  canonical `source.png` coordinates. It is deterministic image preparation,
+  not OCR, and has no operating-system OCR dependency.
 - `text`: content-aware OCR when configured, otherwise explicitly labeled
   geometric hints.
 - `layout`: content and whitespace bands in source pixels.
