@@ -482,7 +482,15 @@ def text_geometry_diagnostic(item, manifest):
     requested = float(requested)
     font = _font_at_em(item.get("_resolved_font_path"), item.get("_resolved_font_index", 0))
     if font is None:
-        return {}
+        return {
+            "limiting_dimension": "unknown",
+            "current_box_px": list(item.get("box_px") or []),
+            "required_content_px": [],
+            "required_content_pt": [],
+            "rendered_line_count": max(1, len(iter_text_lines(item))),
+            "repair_order": ["font_file", "box_geometry", "line_grouping", "font_size"],
+            "warning": "font metrics unavailable; resolve the font before trusting geometry",
+        }
     lines = iter_text_lines(item)
     width_pt = max(1.0, float(item["width"]) * 72)
     height_pt = max(1.0, float(item["height"]) * 72)

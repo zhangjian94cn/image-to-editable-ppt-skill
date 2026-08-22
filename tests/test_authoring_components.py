@@ -94,13 +94,17 @@ def test_builder_preserves_powerpoint_private_font_and_protects_single_line_titl
             assert not build_payload["font_substitutions"]
             assert resolution["resolved"] == "Microsoft YaHei"
             assert resolution["provider"] == "powerpoint-dfonts"
-        else:
+        elif resolution["path"]:
             assert build_payload["font_substitutions"]
+            assert resolution["resolved"] != "Microsoft YaHei"
+        else:
+            assert not build_payload["font_substitutions"]
+            assert resolution["provider"] == ""
         assert build_payload["text_adjustments"]
         deck = Presentation(str(page / "page.pptx"))
         shape = next(shape for shape in deck.slides[0].shapes if getattr(shape, "text", ""))
         run = shape.text_frame.paragraphs[0].runs[0]
-        if resolution["provider"] == "powerpoint-dfonts":
+        if resolution["resolved"] == "Microsoft YaHei":
             assert run.font.name == "Microsoft YaHei"
         else:
             assert run.font.name != "Microsoft YaHei"
@@ -254,8 +258,11 @@ def test_typography_roles_apply_page_scaled_defaults_and_warn_on_core_shrink():
         assert any("role shrink threshold" in warning for warning in payload["warnings"])
         shrink = payload["role_shrink_warnings"][0]
         assert shrink["text_excerpt"] == "放不下的页面主标题"
-        assert shrink["geometry_diagnostic"]["limiting_dimension"] in {"width", "height"}
-        assert len(shrink["geometry_diagnostic"]["required_content_px"]) == 2
+        assert shrink["geometry_diagnostic"]["limiting_dimension"] in {"width", "height", "unknown"}
+        if shrink["geometry_diagnostic"]["limiting_dimension"] == "unknown":
+            assert shrink["geometry_diagnostic"]["warning"]
+        else:
+            assert len(shrink["geometry_diagnostic"]["required_content_px"]) == 2
 
 
 def test_role_deviation_compares_requested_size_not_fit_result():

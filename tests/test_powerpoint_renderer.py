@@ -51,6 +51,7 @@ def test_presentation_snapshot_handles_zero_open_presentations(monkeypatch):
 def test_target_only_render_writes_authoritative_png_without_canary(tmp_path, monkeypatch):
     app = tmp_path / "Microsoft PowerPoint.app"
     app.mkdir()
+    monkeypatch.setattr(renderer.os, "uname", lambda: type("Uname", (), {"sysname": "Darwin"})())
     monkeypatch.setattr(renderer, "POWERPOINT_APP", app)
     monkeypatch.setattr(renderer.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setenv("EDITPPT_POWERPOINT_CONTAINER_ROOT", str(tmp_path / "office"))

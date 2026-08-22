@@ -28,6 +28,7 @@ Release notes are generated from this file. Keep changelog entries in English.
 ### Fixes
 
 - Run the complete pytest suite in CI instead of importing pytest-based modules through incomplete unittest discovery.
+- Keep font-fit geometry diagnostics structurally stable when a CI or authoring host has no usable local font metrics, while making the degraded measurement explicit.
 - Make `editppt render` render the exact `page.pptx` through Microsoft PowerPoint instead of refreshing a manifest sketch.
 - Assemble independent `page.pptx` files with relationship-aware Open XML copying in page order, without requiring page manifests.
 - Label Builder previews as drafts and prefer `rsvg-convert` for reliable audited SVG brand-asset previews.
