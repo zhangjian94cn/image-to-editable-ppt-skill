@@ -116,6 +116,34 @@ class SlideManifest:
         self.shapes.append(item)
         return item
 
+    def add_polygon(
+        self,
+        points_px: Sequence[Point],
+        *,
+        fill: str = "none",
+        stroke: str = "none",
+        stroke_width: float = 1,
+        z_index: float = 100,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        points = [_point(value) for value in points_px]
+        if len(points) < 3:
+            raise ValueError("polygon requires at least three source-space points")
+        xs = [value[0] for value in points]
+        ys = [value[1] for value in points]
+        item: dict[str, Any] = {
+            "type": "polygon",
+            "box_px": [min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)],
+            "polygon_px": [[x, y] for x, y in points],
+            "fill": fill,
+            "stroke": stroke,
+            "stroke_width": float(stroke_width),
+            "z_index": float(z_index),
+        }
+        item.update(extra)
+        self.shapes.append(item)
+        return item
+
     def add_text(
         self,
         box_px: Box,

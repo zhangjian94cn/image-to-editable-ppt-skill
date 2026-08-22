@@ -251,6 +251,17 @@ def _resolve_cases(corpus: Path, suite_name: str) -> list[PageCase]:
     return cases
 
 
+def _filter_cases(cases: list[PageCase], requested: list[str] | None) -> list[PageCase]:
+    if not requested:
+        return cases
+    wanted = set(requested)
+    selected = [case for case in cases if case.page_id in wanted]
+    missing = wanted - {case.page_id for case in selected}
+    if missing:
+        raise BenchmarkError(f"requested pages are not in the suite: {sorted(missing)}")
+    return selected
+
+
 def _page_prompt(skill_root: Path) -> str:
     template = skill_root / "prompts/page-task.md"
     if template.is_file():
@@ -345,7 +356,52 @@ def _render_powerpoint(
 
 
 def _normal_text(value: str) -> str:
-    return re.sub(r"[\s\u000b]+", "", value or "").casefold()
+    normalized = str(value or "").translate(
+        str.maketrans({"丨": "|", "｜": "|", "︱": "|"})
+    )
+    return re.sub(r"[\s\u000b]+", "", normalized).casefold()
+
+
+def _box_overlap(first: Any, second: Any) -> float:
+    """Return how much of ``first`` is covered by ``second`` in source pixels."""
+
+    if not isinstance(first, list) or not isinstance(second, list) or len(first) != 4 or len(second) != 4:
+        return 0.0
+    left, top, width, height = [float(value) for value in first]
+    other_left, other_top, other_width, other_height = [float(value) for value in second]
+    if width <= 0 or height <= 0 or other_width <= 0 or other_height <= 0:
+        return 0.0
+    overlap_width = max(0.0, min(left + width, other_left + other_width) - max(left, other_left))
+    overlap_height = max(0.0, min(top + height, other_top + other_height) - max(top, other_top))
+    return overlap_width * overlap_height / (width * height)
+
+
+def _expected_text_evidence(expected: dict[str, Any]) -> tuple[list[str], list[dict[str, str]]]:
+    """Select rendered text, excluding placeholders and source objects hidden by screenshots."""
+
+    objects = expected.get("objects") or []
+    values: list[str] = []
+    excluded: list[dict[str, str]] = []
+    for index, item in enumerate(objects):
+        if not isinstance(item, dict) or item.get("kind") != "text" or item.get("visible", True) is False:
+            continue
+        value = str(item.get("text") or "")
+        compact = _normal_text(value)
+        if re.fullmatch(r"[‹<«\[]?#(?:›|>|»|\])?", compact):
+            excluded.append({"text": value, "reason": "dynamic_placeholder"})
+            continue
+        hidden_by_picture = any(
+            isinstance(later, dict)
+            and later.get("kind") == "picture"
+            and _box_overlap(item.get("box_px"), later.get("box_px")) >= 0.95
+            for later in objects[index + 1 :]
+        )
+        if hidden_by_picture:
+            excluded.append({"text": value, "reason": "occluded_by_later_picture"})
+            continue
+        if compact:
+            values.append(value)
+    return values, excluded
 
 
 def _pptx_metrics(candidate: Path, expected_path: Path) -> dict[str, Any]:
@@ -384,13 +440,10 @@ def _pptx_metrics(candidate: Path, expected_path: Path) -> dict[str, Any]:
             native_shapes += 1
 
     expected = _read_json(expected_path)
-    expected_text = [
-        str(item.get("text") or "")
-        for item in expected.get("objects") or []
-        if isinstance(item, dict) and item.get("kind") == "text" and item.get("visible", True)
-    ]
+    expected_text, excluded_expected_text = _expected_text_evidence(expected)
     candidate_text = _normal_text("\n".join(text_values))
-    matched = sum(1 for value in expected_text if _normal_text(value) in candidate_text)
+    missing_text = [value for value in expected_text if _normal_text(value) not in candidate_text]
+    matched = len(expected_text) - len(missing_text)
     coverage = matched / len(expected_text) if expected_text else None
     return {
         "slide_count": len(presentation.slides),
@@ -403,6 +456,10 @@ def _pptx_metrics(candidate: Path, expected_path: Path) -> dict[str, Any]:
         "out_of_bounds_count": out_of_bounds,
         "expected_text_count": len(expected_text),
         "matched_text_count": matched,
+        "missing_text_count": len(missing_text),
+        "missing_texts": missing_text,
+        "excluded_expected_text_count": len(excluded_expected_text),
+        "excluded_expected_texts": excluded_expected_text,
         "text_coverage": round(coverage, 6) if coverage is not None else None,
     }
 
@@ -534,10 +591,15 @@ def _issues(
             "message": "页面 Codex 读取了历史 memory，而不是仅依据当前源图和固定 Skill",
         })
     coverage = metrics.get("text_coverage")
+    missing_texts = metrics.get("missing_texts") or []
+    missing_summary = ""
+    if missing_texts:
+        excerpts = [re.sub(r"\s+", " ", str(value)).strip()[:48] for value in missing_texts[:2]]
+        missing_summary = "；未覆盖：" + " / ".join(excerpts)
     if isinstance(coverage, (int, float)) and coverage < 0.7:
-        issues.append({"severity": "P0", "category": "content", "message": f"原文逐块覆盖率仅 {coverage:.1%}"})
+        issues.append({"severity": "P0", "category": "content", "message": f"可见原文逐块覆盖率仅 {coverage:.1%}{missing_summary}"})
     elif isinstance(coverage, (int, float)) and coverage < 0.98:
-        issues.append({"severity": "P1", "category": "content", "message": f"原文逐块覆盖率为 {coverage:.1%}"})
+        issues.append({"severity": "P1", "category": "content", "message": f"可见原文逐块覆盖率为 {coverage:.1%}{missing_summary}"})
     picture = float(metrics.get("max_picture_coverage") or 0.0)
     if picture >= 0.85:
         issues.append({"severity": "P0", "category": "editability", "message": f"单个图片覆盖页面 {picture:.1%}，疑似整页截图"})
@@ -592,12 +654,24 @@ def _report(
     ]
     for name in (
         "object_count", "text_shape_count", "native_shape_count", "table_count",
-        "picture_count", "max_picture_coverage", "text_coverage",
+        "picture_count", "max_picture_coverage", "text_coverage", "missing_text_count",
+        "excluded_expected_text_count",
         "coarse_rgb_loss", "content_ink_loss", "out_of_bounds_count",
         "codex_powerpoint_rendered",
     ):
         if name in metrics and metrics[name] is not None:
             lines.append(f"| `{name}` | `{metrics[name]}` |")
+    missing_texts = metrics.get("missing_texts") or []
+    if missing_texts:
+        lines += ["", "### 未覆盖的可见原文", ""]
+        for value in missing_texts:
+            clean_value = re.sub(r"[\s\u000b]+", " ", str(value)).strip()
+            lines.append(f"- {clean_value}")
+    excluded_expected = metrics.get("excluded_expected_texts") or []
+    if excluded_expected:
+        lines += ["", "### 未纳入覆盖率的源对象", ""]
+        for value in excluded_expected:
+            lines.append(f"- `{value.get('reason', 'excluded')}`：{value.get('text', '')}")
     lines += ["", "## 关键决策", ""]
     if outcome.decisions:
         lines.extend(f"- {value.replace(chr(10), ' ')}" for value in outcome.decisions)
@@ -766,7 +840,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
     skill_root = Path(args.skill_root).expanduser().resolve()
     if not (skill_root / "SKILL.md").is_file():
         raise BenchmarkError(f"invalid Skill root: {skill_root}")
-    cases = _resolve_cases(corpus, args.suite)
+    cases = _filter_cases(_resolve_cases(corpus, args.suite), args.page)
     run_id = args.run_id or _run_id(args.label)
     run_dir = output / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -775,6 +849,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
     run_meta = {
         "schema_version": 2, "run_id": run_id, "label": args.label,
         "suite": args.suite, "started_at": _now(), "profile": args.profile,
+        "page_filter": list(args.page or []),
         "model": args.model, "effort": args.effort,
         "skill": {
             "root": str(skill_root), "commit": _git_value(repo, "rev-parse", "HEAD"),
@@ -803,7 +878,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
 
 def verify_corpus(args: argparse.Namespace) -> int:
     corpus = Path(args.corpus).expanduser().resolve()
-    cases = _resolve_cases(corpus, args.suite)
+    cases = _filter_cases(_resolve_cases(corpus, args.suite), args.page)
     payload = {
         "ok": True, "suite": args.suite, "page_count": len(cases),
         "pages": [{"page_id": value.page_id, "sha256": _sha256(value.source)} for value in cases],
@@ -826,6 +901,10 @@ def build_parser() -> argparse.ArgumentParser:
         command = sub.add_parser(name)
         command.add_argument("--corpus", required=True)
         command.add_argument("--suite", required=True)
+        command.add_argument(
+            "--page", action="append", default=[],
+            help="run or verify only this exact page_id from the selected suite; repeatable",
+        )
         if name == "run":
             command.add_argument("--out", required=True)
             command.add_argument("--label", required=True)

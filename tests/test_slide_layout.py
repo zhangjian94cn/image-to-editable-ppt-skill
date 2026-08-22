@@ -7,7 +7,9 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CLI_DIR = ROOT / "skills/image-to-editable-ppt/cli"
 RUNTIME_DIR = ROOT / "skills/image-to-editable-ppt/cli/editppt/runtime"
+sys.path.insert(0, str(CLI_DIR))
 sys.path.insert(0, str(RUNTIME_DIR))
 
 from build_pptx_from_manifest import (  # noqa: E402
@@ -175,6 +177,25 @@ class SlideLayoutTest(unittest.TestCase):
         self.assertIn('anchor="ctr"', xml)
         self.assertNotIn('algn="center"', xml)
         self.assertNotIn('anchor="middle"', xml)
+
+    def test_text_box_supports_native_fill_and_border(self):
+        xml = text_box_xml(
+            2,
+            {
+                "text": "状态",
+                "left": 0,
+                "top": 0,
+                "width": 1,
+                "height": 1,
+                "fill": "#EAF3FF",
+                "stroke": "#0A65B7",
+                "stroke_width": 2,
+            },
+        )
+
+        self.assertIn('<a:solidFill><a:srgbClr val="EAF3FF"/></a:solidFill>', xml)
+        self.assertIn('<a:ln w="25400">', xml)
+        self.assertIn('<a:srgbClr val="0A65B7"/>', xml)
 
     def test_preview_centers_text_inside_its_box(self):
         manifest = {

@@ -120,6 +120,18 @@ def test_builder_accepts_common_aliases_and_source_pixel_font_sizes():
         assert 'sz="1200"' in slide_xml
 
 
+def test_polygon_helper_uses_source_space_points():
+    value = SlideManifest(1600, 900)
+    item = value.add_polygon(
+        [[10, 20], [110, 20], [80, 90], [20, 70]],
+        fill="#DDEEFF",
+        stroke="#0A65B7",
+    )
+
+    assert item["box_px"] == [10.0, 20.0, 100.0, 70.0]
+    assert item["polygon_px"] == [[10.0, 20.0], [110.0, 20.0], [80.0, 90.0], [20.0, 70.0]]
+
+
 def test_builder_surfaces_severe_automatic_text_shrink():
     with tempfile.TemporaryDirectory() as temporary:
         page = Path(temporary)

@@ -13,6 +13,7 @@ from benchmark_runner.runner import (
     ROOT_FILES,
     _codex_command,
     _issues,
+    _filter_cases,
     _pptx_metrics,
     _resolve_cases,
     _skill_trace,
@@ -35,6 +36,12 @@ def test_page_suite_resolves_one_frozen_page(tmp_path: Path):
     assert [value.page_id for value in cases] == ["case-p001"]
 
 
+def test_page_filter_keeps_exact_suite_page(tmp_path: Path):
+    cases = _resolve_cases(_corpus(tmp_path), "round-0")
+    selected = _filter_cases(cases, ["case-p001"])
+    assert selected == cases
+
+
 def test_pptx_readback_flags_full_page_picture_and_text(tmp_path: Path):
     pptx = tmp_path / "candidate.pptx"
     picture = tmp_path / "picture.png"
@@ -54,6 +61,46 @@ def test_pptx_readback_flags_full_page_picture_and_text(tmp_path: Path):
     verdict, issues = _issues({**metrics, "coarse_rgb_loss": 0.0, "content_ink_loss": 0.0})
     assert verdict == "reject"
     assert any(value["category"] == "editability" for value in issues)
+
+
+def test_text_coverage_ignores_dynamic_placeholders_and_text_hidden_by_later_picture(tmp_path: Path):
+    pptx = tmp_path / "candidate.pptx"
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1)).text = "标题 | 可编辑页面"
+    presentation.save(pptx)
+    expected = tmp_path / "expected.json"
+    expected.write_text(json.dumps({"objects": [
+        {"kind": "text", "text": "‹#›", "box_px": [900, 800, 60, 30]},
+        {"kind": "text", "text": "标题丨可编辑页面", "box_px": [100, 100, 500, 80]},
+        {"kind": "text", "text": "应用截图", "box_px": [700, 300, 60, 180]},
+        {"kind": "picture", "box_px": [650, 250, 200, 350]},
+    ]}, ensure_ascii=False))
+
+    metrics = _pptx_metrics(pptx, expected)
+
+    assert metrics["text_coverage"] == 1.0
+    assert metrics["expected_text_count"] == 1
+    assert metrics["excluded_expected_text_count"] == 2
+    assert {value["reason"] for value in metrics["excluded_expected_texts"]} == {
+        "dynamic_placeholder", "occluded_by_later_picture",
+    }
+
+
+def test_text_coverage_reports_exact_visible_missing_text(tmp_path: Path):
+    pptx = tmp_path / "candidate.pptx"
+    presentation = Presentation()
+    presentation.slides.add_slide(presentation.slide_layouts[6])
+    presentation.save(pptx)
+    expected = tmp_path / "expected.json"
+    expected.write_text(json.dumps({"objects": [
+        {"kind": "text", "text": "不能遗漏的版权句", "box_px": [10, 10, 300, 30]},
+    ]}, ensure_ascii=False))
+
+    metrics = _pptx_metrics(pptx, expected)
+
+    assert metrics["text_coverage"] == 0.0
+    assert metrics["missing_texts"] == ["不能遗漏的版权句"]
 
 
 def test_direct_powerpoint_automation_is_rejected():

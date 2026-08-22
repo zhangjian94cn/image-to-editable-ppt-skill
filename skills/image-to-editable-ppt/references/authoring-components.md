@@ -89,8 +89,10 @@ fill, color, bold, border, alignment, and rich-text runs where needed.
 
 - `add_shape`: rectangle, rounded rectangle, ellipse, arbitrary supported
   preset, or source-space polygon.
+- `add_polygon`: three or more source-space points, with native fill and stroke.
 - `add_connector`: straight or bent native connector with start/end arrows.
-- `add_text`: one text box with plain text, runs, or paragraphs.
+- `add_text`: one text box with plain text, runs, or paragraphs; pass `fill`,
+  `stroke`, and `stroke_width` when the rectangular text box itself is the card.
 - `add_image`: compact independent asset with required alt text.
 - `add_table`: native editable table.
 - `add_section_band`, `add_card`, `add_timeline_stage`: reusable composites.

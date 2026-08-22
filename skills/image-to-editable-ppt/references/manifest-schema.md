@@ -18,6 +18,9 @@ primarily text, shapes, tables, connectors, and compact images.
 
 Objects may use inches (`left`, `top`, `width`, `height`) or source pixels
 (`box_px: [x, y, width, height]`). Lines use `points_px: [x1, y1, x2, y2]`.
+Polygons use `polygon_px: [[x1, y1], [x2, y2], [x3, y3], ...]`; nested
+`points_px` is accepted as the same polygon spelling, but the explicit field is
+preferred.
 `z_index` controls the shared object stack. Shape effects default to none.
 For task directories prepared by the Skill, `source.width_px/height_px` must
 equal `editppt inspect layout`'s `size_px`; never substitute the original
@@ -81,7 +84,10 @@ dozens of unrelated rectangles and text boxes.
 - `images`: local source-bound paths for logos, photos, maps, screenshots, or
   complex illustrations. Keep their boxes tight.
 - `text_boxes`: editable text with runs, paragraphs, alignment, vertical
-  alignment, and explicit wrapping.
+  alignment, explicit wrapping, and optional native `fill`, `stroke`, and
+  `stroke_width`. Use these properties for a label/card whose background is
+  rectangular; do not add a second shape unless the source needs different
+  rounding, geometry, or stacking.
 
 After `editppt build`, inspect with `editppt render` and `editppt inspect pptx`.
 The manifest draft is not final visual evidence.

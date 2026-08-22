@@ -154,6 +154,16 @@ def px_to_inches(manifest, x, y, width, height):
 
 def normalize_position_item(manifest, item):
     item = dict(item)
+    raw_points = item.get("points_px")
+    if (
+        isinstance(raw_points, list)
+        and len(raw_points) >= 3
+        and all(isinstance(point, (list, tuple)) and len(point) == 2 for point in raw_points)
+    ):
+        if item.get("polygon_px") is not None:
+            raise ValueError("provide polygon_px or nested points_px, not both")
+        item["polygon_px"] = raw_points
+        item.pop("points_px", None)
     if "polygon_px" in item:
         points = [(float(point[0]), float(point[1])) for point in item["polygon_px"]]
         if points and "box_px" not in item:
@@ -168,7 +178,10 @@ def normalize_position_item(manifest, item):
         x, y, width, height = item["box_px"]
         item.update(px_to_inches(manifest, x, y, width, height))
     if "points_px" in item:
-        x1, y1, x2, y2 = item["points_px"]
+        values = item["points_px"]
+        if not isinstance(values, list) or len(values) != 4 or any(isinstance(value, (list, tuple, dict)) for value in values):
+            raise ValueError("points_px must be [x1, y1, x2, y2]; use polygon_px for three or more [x, y] points")
+        x1, y1, x2, y2 = values
         left = min(float(x1), float(x2))
         top = min(float(y1), float(y2))
         width = abs(float(x2) - float(x1))
@@ -504,6 +517,8 @@ def text_box_xml(idx, item):
     wrap = item.get("wrap", "none")
     autofit = item.get("autofit", "none")
     autofit_xml = "<a:spAutoFit/>" if autofit == "shape" else "<a:noAutofit/>"
+    background_fill = shape_fill_for_item(item)
+    border = shape_line_xml(item.get("stroke", "none"), item.get("stroke_width", 1), item.get("dash"))
     paragraphs = item.get("paragraphs")
     runs = item.get("runs")
 
@@ -543,7 +558,7 @@ def text_box_xml(idx, item):
     return f"""
       <p:sp>
         <p:nvSpPr><p:cNvPr id="{idx}" name="TextBox {idx}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>
-        <p:spPr><a:xfrm{rotation_attr}><a:off x="{left}" y="{top}"/><a:ext cx="{width}" cy="{height}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></p:spPr>
+        <p:spPr><a:xfrm{rotation_attr}><a:off x="{left}" y="{top}"/><a:ext cx="{width}" cy="{height}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>{background_fill}{border}</p:spPr>
         <p:txBody>
           <a:bodyPr wrap="{xml_text(wrap)}" anchor="{anchor}" lIns="0" tIns="0" rIns="0" bIns="0">{autofit_xml}</a:bodyPr><a:lstStyle/>
           {text_body}
@@ -1266,6 +1281,15 @@ def render_preview(manifest, manifest_path, out_path):
         box_width = max(1, int(item.get("width", 1) * scale))
         box_height = max(1, int(item.get("height", 0.4) * scale))
         rotation = float(item.get("rotation", 0) or 0)
+        background = preview_color(item.get("fill"))
+        border = preview_color(item.get("stroke"))
+        if background not in (None, "none") or border not in (None, "none"):
+            draw.rectangle(
+                [box_x, box_y, box_x + box_width, box_y + box_height],
+                fill=None if background in (None, "none") else background,
+                outline=None if border in (None, "none") else border,
+                width=max(1, int(float(item.get("stroke_width", 1)))),
+            )
 
         def aligned_origin(bounds, origin_x, origin_y):
             text_width = bounds[2] - bounds[0]
