@@ -81,6 +81,9 @@ PowerPoint render.
   semantic role it actually represents; do not assign one role merely because
   two texts share a row. Set `font_size_source: measured` when an object size
   comes from OCR/ink evidence so a justified source variation is auditable.
+- Resolve every unmeasured `role_size_deviation` before delivery. For an
+  ordinary flat bar or line chart, prefer the shared editable chart components
+  instead of duplicating chart geometry and typography in page code.
 - Give every overlapping object a named `layer`. For a card header use
   `container → decoration_behind → band → text`; repair stack order before
   changing source geometry. An explicit `z_index` remains an escape hatch and

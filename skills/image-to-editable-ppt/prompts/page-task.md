@@ -104,13 +104,22 @@ Before writing `result.json`, read `.editppt/build.json` directly. Fix every
 `role_shrink_warning`, using its text excerpt, limiting dimension, and required
 content box suggestion. A successful `editppt build` exit code alone is not
 evidence that typography is complete.
+Also resolve every `role_size_deviation` whose `measured_override` is false:
+either use the common role size, choose the correct semantic role, or mark the
+specific size as measured only when the source image or evidence actually
+supports it. Do not silence the diagnostic with an invented measurement.
 
 Generate `page.pptx`, run `editppt render` on that exact file, and view the
 resulting `preview.png`. Repair visible content omissions, overlaps, overflow,
 unexpected wrapping, and obvious geometry differences, then render again as
 needed. The render is SHA-cached, and `editppt compare` produces local
 source/candidate difference regions; inspect those before repeating a whole
-page edit. Do not declare success from a manifest preview, object count, or ZIP
+page edit. If you rebuild after a comparison, rerender and rerun `compare` on
+the final PPTX; the old comparison no longer describes the candidate. For
+conventional flat bar and line charts, prefer the shared
+`add_editable_bar_chart` / `add_editable_line_chart` components and tune their
+source-space boxes and sizes instead of reimplementing axes, grids, bars,
+lines, markers, and labels. Do not declare success from a manifest preview, object count, or ZIP
 check. If Microsoft PowerPoint cannot render the file, do not report ready.
 Keep product names, English identifiers, capitalization, uncommon spellings,
 and version strings exactly as shown. Do not rewrite a rare source term into a

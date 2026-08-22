@@ -445,6 +445,211 @@ class SlideManifest:
         )
         return {"container": container, "accent": accent, "band": band, "title": title_item}
 
+    def add_editable_bar_chart(
+        self,
+        box_px: Box,
+        labels: Sequence[str],
+        values: Sequence[float],
+        *,
+        title: str = "",
+        maximum: float | None = None,
+        grid_values: Sequence[float] | None = None,
+        fill: str = "#FFFFFF",
+        bar_fill: str = "#5C9BC2",
+        grid_color: str = "#D9D9D9",
+        text_color: str = "#111111",
+        title_font_size_px: float = 24,
+        label_font_size_px: float = 14,
+        tick_font_size_px: float = 14,
+        show_values: bool = False,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Build a deterministic native-shape bar chart in source coordinates."""
+
+        if not labels or len(labels) != len(values):
+            raise ValueError("bar chart labels and values must be non-empty and have equal length")
+        numeric = [float(value) for value in values]
+        if any(value < 0 for value in numeric):
+            raise ValueError("bar chart values must be non-negative")
+        upper = float(maximum) if maximum is not None else max(numeric, default=0.0)
+        if upper <= 0 or any(value > upper for value in numeric):
+            raise ValueError("bar chart maximum must be positive and cover every value")
+        ticks = [float(value) for value in (grid_values or [0, upper / 2, upper])]
+        if any(value < 0 or value > upper for value in ticks):
+            raise ValueError("bar chart grid values must be within 0..maximum")
+
+        x, y, width, height = _box(box_px)
+        title_height = max(0.0, title_font_size_px * 1.7 if title else 0.0)
+        label_height = max(label_font_size_px * 2.6, height * 0.16)
+        tick_width = max(tick_font_size_px * 3.2, width * 0.08)
+        plot_left = x + tick_width
+        plot_top = y + title_height + tick_font_size_px * 0.4
+        plot_width = max(1.0, width - tick_width - label_font_size_px * 0.8)
+        plot_height = max(1.0, height - title_height - label_height - tick_font_size_px * 0.8)
+
+        result: dict[str, list[dict[str, Any]]] = {"background": [], "grid": [], "bars": [], "labels": []}
+        result["background"].append(
+            self.add_shape([x, y, width, height], fill=fill, stroke="none", layer="container")
+        )
+        if title:
+            result["labels"].append(
+                self.add_text(
+                    [x, y, width, title_height], title,
+                    font_size_px=title_font_size_px, text_role="subheading",
+                    bold=True, align="center", valign="middle", wrap="none",
+                )
+            )
+        for tick in sorted(set(ticks)):
+            py = plot_top + plot_height * (1.0 - tick / upper)
+            result["grid"].append(
+                self.add_connector(
+                    [plot_left, py], [plot_left + plot_width, py], color=grid_color,
+                    width=1, start_arrow="none", end_arrow="none", layer="decoration_behind",
+                )
+            )
+            result["labels"].append(
+                self.add_text(
+                    [x, py - tick_font_size_px, tick_width * 0.82, tick_font_size_px * 2],
+                    f"{tick:g}", font_size_px=tick_font_size_px, text_role="caption",
+                    color=text_color, align="right", valign="middle", wrap="none",
+                )
+            )
+
+        slot = plot_width / len(numeric)
+        bar_width = slot * 0.46
+        for index, (label, value) in enumerate(zip(labels, numeric)):
+            center = plot_left + slot * (index + 0.5)
+            bar_height = plot_height * value / upper
+            result["bars"].append(
+                self.add_shape(
+                    [center - bar_width / 2, plot_top + plot_height - bar_height, bar_width, max(1.0, bar_height)],
+                    fill=bar_fill, stroke="none", layer="content",
+                )
+            )
+            result["labels"].append(
+                self.add_text(
+                    [center - slot * 0.48, plot_top + plot_height + 2, slot * 0.96, label_height - 2],
+                    str(label), font_size_px=label_font_size_px, text_role="caption",
+                    color=text_color, align="center", valign="top", wrap="square",
+                )
+            )
+            if show_values:
+                result["labels"].append(
+                    self.add_text(
+                        [center - slot * 0.48, plot_top + plot_height - bar_height - label_font_size_px * 1.8, slot * 0.96, label_font_size_px * 1.7],
+                        f"{value:g}", font_size_px=label_font_size_px, text_role="caption",
+                        color=text_color, align="center", valign="bottom", wrap="none",
+                    )
+                )
+        return result
+
+    def add_editable_line_chart(
+        self,
+        box_px: Box,
+        labels: Sequence[str],
+        values: Sequence[float],
+        *,
+        title: str = "",
+        minimum: float = 0,
+        maximum: float | None = None,
+        grid_values: Sequence[float] | None = None,
+        fill: str = "#FFFFFF",
+        line_color: str = "#2387D0",
+        marker_fill: str = "#F05A67",
+        grid_color: str = "#D9D9D9",
+        text_color: str = "#111111",
+        title_font_size_px: float = 24,
+        label_font_size_px: float = 14,
+        tick_font_size_px: float = 14,
+        show_values: bool = True,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Build a native editable line chart with deterministic typography."""
+
+        if len(labels) < 2 or len(labels) != len(values):
+            raise ValueError("line chart needs at least two labels and matching values")
+        numeric = [float(value) for value in values]
+        lower = float(minimum)
+        upper = float(maximum) if maximum is not None else max(numeric)
+        if upper <= lower or any(value < lower or value > upper for value in numeric):
+            raise ValueError("line chart bounds must cover every value")
+        ticks = [float(value) for value in (grid_values or [lower, (lower + upper) / 2, upper])]
+        if any(value < lower or value > upper for value in ticks):
+            raise ValueError("line chart grid values must be within the declared bounds")
+
+        x, y, width, height = _box(box_px)
+        title_height = max(0.0, title_font_size_px * 1.7 if title else 0.0)
+        label_height = max(label_font_size_px * 1.9, height * 0.12)
+        tick_width = max(tick_font_size_px * 3.2, width * 0.08)
+        plot_left = x + tick_width
+        plot_top = y + title_height + label_font_size_px * 1.8
+        plot_width = max(1.0, width - tick_width - label_font_size_px)
+        plot_height = max(1.0, height - title_height - label_height - label_font_size_px * 2.2)
+
+        result: dict[str, list[dict[str, Any]]] = {"background": [], "grid": [], "line": [], "labels": []}
+        result["background"].append(
+            self.add_shape([x, y, width, height], fill=fill, stroke="none", layer="container")
+        )
+        if title:
+            result["labels"].append(
+                self.add_text(
+                    [x, y, width, title_height], title,
+                    font_size_px=title_font_size_px, text_role="subheading",
+                    bold=True, align="center", valign="middle", wrap="none",
+                )
+            )
+        for tick in sorted(set(ticks)):
+            py = plot_top + plot_height * (1.0 - (tick - lower) / (upper - lower))
+            result["grid"].append(
+                self.add_connector(
+                    [plot_left, py], [plot_left + plot_width, py], color=grid_color,
+                    width=1, start_arrow="none", end_arrow="none", layer="decoration_behind",
+                )
+            )
+            result["labels"].append(
+                self.add_text(
+                    [x, py - tick_font_size_px, tick_width * 0.82, tick_font_size_px * 2],
+                    f"{tick:g}", font_size_px=tick_font_size_px, text_role="caption",
+                    color=text_color, align="right", valign="middle", wrap="none",
+                )
+            )
+
+        step = plot_width / (len(numeric) - 1)
+        points = [
+            [plot_left + step * index, plot_top + plot_height * (1.0 - (value - lower) / (upper - lower))]
+            for index, value in enumerate(numeric)
+        ]
+        result["line"].append(self.add_polyline(points, stroke=line_color, stroke_width=3, layer="content"))
+        marker = max(5.0, label_font_size_px * 0.55)
+        for index, (label, value, point) in enumerate(zip(labels, numeric, points)):
+            px, py = point
+            result["line"].append(
+                self.add_shape(
+                    [px - marker / 2, py - marker / 2, marker, marker],
+                    kind="ellipse", fill=marker_fill, stroke="none", layer="decoration_front",
+                )
+            )
+            label_width = step if index not in {0, len(numeric) - 1} else step * 0.9
+            label_left = px - label_width / 2
+            if index == 0:
+                label_left = px
+            elif index == len(numeric) - 1:
+                label_left = px - label_width
+            result["labels"].append(
+                self.add_text(
+                    [label_left, plot_top + plot_height + 2, label_width, label_height - 2],
+                    str(label), font_size_px=label_font_size_px, text_role="caption",
+                    color=text_color, bold=True, align="center", valign="top", wrap="none",
+                )
+            )
+            if show_values:
+                result["labels"].append(
+                    self.add_text(
+                        [label_left, py - label_font_size_px * 2.1, label_width, label_font_size_px * 1.8],
+                        f"{value:g}", font_size_px=label_font_size_px, text_role="caption",
+                        color=text_color, bold=True, align="center", valign="bottom", wrap="none",
+                    )
+                )
+        return result
+
     def add_card(
         self,
         box_px: Box,

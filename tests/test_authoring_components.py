@@ -9,6 +9,7 @@ from pathlib import Path
 
 from PIL import Image
 from pptx import Presentation
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -137,6 +138,64 @@ def test_layered_header_uses_named_layers_and_masks_accent_behind_band():
             ("text", 300.0),
         ]
         assert not report["conflicts"]
+
+
+def test_editable_chart_components_build_native_shapes_and_consistent_caption_roles():
+    with tempfile.TemporaryDirectory() as temporary:
+        page = Path(temporary)
+        Image.new("RGB", (1600, 900), "white").save(page / "source.png")
+        value = SlideManifest(1600, 900)
+        bars = value.add_editable_bar_chart(
+            [80, 80, 650, 330],
+            ["泰州", "镇江", "徐州"],
+            [19, 17, 13],
+            title="各地市TPD",
+            maximum=20,
+            grid_values=[0, 5, 10, 15, 20],
+        )
+        line = value.add_editable_line_chart(
+            [820, 80, 650, 330],
+            ["02月", "03月", "04月", "05月"],
+            [19.3, 23.2, 44.2, 46.6],
+            title="Token 整体使用情况",
+            minimum=10,
+            maximum=55,
+            grid_values=[10, 25, 40, 55],
+        )
+        value.write(page / "manifest.json")
+
+        assert len(bars["bars"]) == 3
+        assert len(line["line"]) == 5
+        assert all(item["layer"] == "decoration_behind" for item in bars["grid"] + line["grid"])
+        caption_sizes = {
+            item["font_size"]
+            for item in value.text_boxes
+            if item["text_role"] == "caption" and "font_size" in item
+        }
+        assert len(caption_sizes) == 1
+
+        built = run_cli("build", page)
+        assert built.returncode == 0, built.stderr
+        payload = json.loads(built.stdout)
+        report = json.loads(Path(payload["build_report"]).read_text())
+        assert report["objects"]["images"] == 0
+        assert report["objects"]["shapes"] >= 17
+        assert not [item for item in report["role_size_deviations"] if not item["measured_override"]]
+        with zipfile.ZipFile(page / "page.pptx") as package:
+            slide_xml = package.read("ppt/slides/slide1.xml").decode("utf-8")
+        assert "各地市TPD" in slide_xml
+        assert "Token 整体使用情况" in slide_xml
+        assert '<a:path w="21600" h="21600" fill="none">' in slide_xml
+
+
+def test_editable_chart_components_reject_invalid_data_contracts():
+    page = SlideManifest(1600, 900)
+    with pytest.raises(ValueError, match="equal length"):
+        page.add_editable_bar_chart([10, 10, 400, 250], ["A"], [1, 2])
+    with pytest.raises(ValueError, match="cover every value"):
+        page.add_editable_bar_chart([10, 10, 400, 250], ["A"], [2], maximum=1)
+    with pytest.raises(ValueError, match="at least two"):
+        page.add_editable_line_chart([10, 10, 400, 250], ["A"], [1])
 
 
 def test_explicit_z_index_wins_over_named_layer_with_visible_warning():

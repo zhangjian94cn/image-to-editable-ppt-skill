@@ -118,6 +118,35 @@ fill, color, bold, border, alignment, and rich-text runs where needed.
 - `add_table`: native editable table.
 - `add_section_band`, `add_layered_header`, `add_card`, `add_timeline_stage`:
   reusable composites.
+- `add_editable_bar_chart`, `add_editable_line_chart`: deterministic native
+  shape charts with editable grids, axes, marks, labels, consistent caption
+  typography, and named layers.
+
+## Editable charts
+
+```python
+page.add_editable_bar_chart(
+    [610, 410, 410, 290],
+    ["泰州", "镇江", "徐州"],
+    [19, 17, 13],
+    title="各地市TPD",
+    maximum=20,
+    grid_values=[0, 5, 10, 15, 20],
+)
+page.add_editable_line_chart(
+    [120, 470, 400, 280],
+    ["02月", "03月", "04月", "05月"],
+    [19.3, 23.2, 44.2, 46.6],
+    title="Token 整体使用情况",
+    minimum=10,
+    maximum=55,
+    grid_values=[10, 25, 40, 55],
+)
+```
+
+Chart geometry is expressed in source pixels. All chart output is native and
+editable; the helpers never rasterize a graph. Use them for conventional flat
+charts and keep unusual infographics in lower-level source-space objects.
 
 All coordinates are source pixels. Do not hard-code a benchmark filename or
 case-specific coordinate rule into the shared library.
