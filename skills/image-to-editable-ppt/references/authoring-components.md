@@ -15,6 +15,7 @@ page.add_text(
     "源图中的单行标题",
     font="Microsoft YaHei",  # Builder resolves an installed equivalent.
     font_size_px=48,
+    text_role="slide_title",
     bold=True,
     color="#0588D4",
 )
@@ -65,6 +66,22 @@ page.add_card(
 )
 ```
 
+For a title band that masks part of a decorative accent, do not rely on write
+order. Use the explicit layered component:
+
+```python
+page.add_layered_header(
+    [10, 45, 420, 300],
+    [10, 45, 420, 58],
+    [90, 91, 260, 18],
+    "整体使用分析",
+    title_font_size_px=32,
+)
+```
+
+It produces `container → decoration_behind → band → text`, so the accent is
+behind the title band even if the manifest is later reorganized.
+
 These components do not redesign a page. Match their boxes, fills, strokes,
 text, and rounding to the source; use lower-level `add_shape` and `add_text`
 when the source differs.
@@ -99,7 +116,8 @@ fill, color, bold, border, alignment, and rich-text runs where needed.
   `stroke`, and `stroke_width` when the rectangular text box itself is the card.
 - `add_image`: compact independent asset with required alt text.
 - `add_table`: native editable table.
-- `add_section_band`, `add_card`, `add_timeline_stage`: reusable composites.
+- `add_section_band`, `add_layered_header`, `add_card`, `add_timeline_stage`:
+  reusable composites.
 
 All coordinates are source pixels. Do not hard-code a benchmark filename or
 case-specific coordinate rule into the shared library.
@@ -107,3 +125,5 @@ The page `width_px/height_px` are the prepared authoring dimensions from
 `editppt inspect layout`, not an inferred screenshot display size. Use
 `font_size_px` for source-derived typography; use `font_size` only when you
 intentionally know the PowerPoint point size.
+Declare `text_role` for text and `layer` for overlapping objects. Use
+`z_index` only when the named layers cannot express a genuine source stack.

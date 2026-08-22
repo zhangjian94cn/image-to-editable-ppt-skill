@@ -14,7 +14,8 @@ from xml.etree import ElementTree as ET
 
 from PIL import ImageFont
 
-from text_fit_tool import find_font
+from font_registry import font_environment_fingerprint, resolve_font
+from typography import LAYER_Z, ROLE_SPECS, boxes_overlap, resolve_layer
 
 
 EMU_PER_INCH = 914400
@@ -257,6 +258,39 @@ def normalize_font_size_item(manifest, item):
     return item
 
 
+def apply_typography_role(manifest, item):
+    """Apply manifest typography defaults without overriding measured evidence."""
+
+    item = dict(item)
+    role = str(item.get("text_role") or "").strip()
+    if not role:
+        return item
+    if role not in ROLE_SPECS:
+        raise ValueError(f"unknown text_role: {role}")
+    typography = manifest.get("typography") if isinstance(manifest.get("typography"), dict) else {}
+    roles = typography.get("roles") if isinstance(typography.get("roles"), dict) else {}
+    configured = roles.get(role) if isinstance(roles.get(role), dict) else {}
+    source = source_size_px(manifest)
+    source_height = float(source[1]) if source else 900.0
+    scale = source_height / 900.0
+    if item.get("font") in (None, "") and typography.get("font_family"):
+        item["font"] = str(typography["font_family"])
+    if item.get("font_size") is None and item.get("font_size_px") is None:
+        if configured.get("font_size") is not None:
+            item["font_size"] = float(configured["font_size"])
+            item["font_size_source"] = "typography_role"
+        else:
+            px = configured.get("font_size_px")
+            if px is None:
+                px = float(ROLE_SPECS[role]["default_px"]) * scale
+                item["font_size_source"] = "role_fallback"
+            else:
+                item["font_size_source"] = "typography_role"
+            item["font_size_px"] = float(px)
+    item["_text_role"] = role
+    return item
+
+
 def iter_text_lines(item):
     if item.get("paragraphs"):
         lines = []
@@ -310,15 +344,20 @@ def resolve_text_fonts(item):
     if item.get("preserve_font_name"):
         return item
 
+    content = "".join(iter_text_lines(item))
+    require_cjk = any("\u4e00" <= char <= "\u9fff" for char in content)
+
     def resolve(record, inherited=""):
         requested = str(record.get("font") or inherited or "PingFang SC").strip()
-        path, family = find_font(requested)
-        if family:
-            if family.casefold() != requested.casefold():
+        face = resolve_font(requested, require_cjk=require_cjk)
+        if face:
+            if face.family.casefold() != requested.casefold():
                 record.setdefault("_requested_font", requested)
-            record["font"] = family
-        if path:
-            record["_resolved_font_path"] = str(path)
+            record["font"] = face.family
+            record["_resolved_font_path"] = face.path
+            record["_resolved_font_index"] = face.face_index
+            record["_resolved_font_sha256"] = face.sha256
+            record["_resolved_font_provider"] = face.provider
 
     resolve(item)
     base_font = str(item.get("font") or "PingFang SC")
@@ -333,11 +372,11 @@ def resolve_text_fonts(item):
     return item
 
 
-def _font_at_em(path):
+def _font_at_em(path, face_index=0):
     if not path:
         return None
     try:
-        return ImageFont.truetype(str(path), size=100)
+        return ImageFont.truetype(str(path), size=100, index=int(face_index or 0))
     except OSError:
         return None
 
@@ -345,7 +384,7 @@ def _font_at_em(path):
 def _actual_text_limits(item, manifest):
     """Return width/height font-size limits using the resolved local font."""
 
-    font = _font_at_em(item.get("_resolved_font_path"))
+    font = _font_at_em(item.get("_resolved_font_path"), item.get("_resolved_font_index", 0))
     if font is None or "width" not in item or "height" not in item:
         return None
     lines = iter_text_lines(item)
@@ -440,19 +479,28 @@ def normalize_manifest(manifest):
     text_boxes = list(normalized.get("text_boxes", []))
     normalized["text_boxes"] = []
     for item in text_boxes:
-        prepared = resolve_text_fonts(normalize_position_item(normalized, normalize_font_size_item(normalized, item)))
+        role_item = apply_typography_role(normalized, item)
+        prepared = resolve_text_fonts(normalize_position_item(normalized, normalize_font_size_item(normalized, role_item)))
         normalized["text_boxes"].append(fit_text_item(prepared, normalized))
     for key in ("images", "shapes"):
         normalized[key] = [normalize_position_item(normalized, item) for item in normalized.get(key, [])]
     tables = list(normalized.get("tables", []))
     normalized["tables"] = []
     for item in tables:
-        prepared = resolve_text_fonts(normalize_position_item(normalized, normalize_font_size_item(normalized, item)))
+        role_item = apply_typography_role(normalized, item)
+        prepared = resolve_text_fonts(normalize_position_item(normalized, normalize_font_size_item(normalized, role_item)))
         for row in prepared.get("rows", []):
             for cell in row:
                 if isinstance(cell, dict):
                     resolve_text_fonts(cell)
         normalized["tables"].append(prepared)
+    defaults = {"shapes": 100.0, "images": 200.0, "tables": 250.0, "text_boxes": 300.0}
+    for key, default_z in defaults.items():
+        for item in normalized.get(key, []):
+            effective, conflict = resolve_layer(item, default_z)
+            item["_effective_z_index"] = effective
+            if conflict:
+                item["_layer_conflict"] = conflict
     return normalized
 
 
@@ -820,13 +868,13 @@ def slide_xml(manifest):
     parts = []
     layered = []
     for index, item in enumerate(manifest.get("shapes", [])):
-        layered.append((float(item.get("z_index", 100)), index, "shape", item, None))
+        layered.append((float(item.get("_effective_z_index", item.get("z_index", 100))), index, "shape", item, None))
     for rel_index, item in enumerate(manifest.get("images", []), start=1):
-        layered.append((float(item.get("z_index", 200)), rel_index, "image", item, f"rId{rel_index + 1}"))
+        layered.append((float(item.get("_effective_z_index", item.get("z_index", 200))), rel_index, "image", item, f"rId{rel_index + 1}"))
     for index, item in enumerate(manifest.get("tables", [])):
-        layered.append((float(item.get("z_index", 250)), index, "table", item, None))
+        layered.append((float(item.get("_effective_z_index", item.get("z_index", 250))), index, "table", item, None))
     for index, item in enumerate(manifest.get("text_boxes", [])):
-        layered.append((float(item.get("z_index", 300)), index, "text", item, None))
+        layered.append((float(item.get("_effective_z_index", item.get("z_index", 300))), index, "text", item, None))
 
     for _z_index, _order, kind, item, rel_id in sorted(layered, key=lambda entry: (entry[0], entry[1])):
         if kind == "shape":
@@ -1103,8 +1151,19 @@ def write_pptx(manifest, out_path, manifest_path):
 
 def build_report(normalized, out_path):
     substitutions = []
+    font_resolution = []
     text_adjustments = []
+    typography_adjustments = []
     for index, item in enumerate(normalized.get("text_boxes", []), start=1):
+        font_resolution.append({
+            "text_box": index,
+            "requested": item.get("_requested_font", item.get("font", "")),
+            "resolved": item.get("font", ""),
+            "path": item.get("_resolved_font_path", ""),
+            "face_index": int(item.get("_resolved_font_index") or 0),
+            "sha256": item.get("_resolved_font_sha256", ""),
+            "provider": item.get("_resolved_font_provider", ""),
+        })
         if item.get("_requested_font"):
             substitutions.append({
                 "text_box": index,
@@ -1116,15 +1175,85 @@ def build_report(normalized, out_path):
             effective = float(item.get("font_size", requested))
             text_adjustments.append({
                 "text_box": index,
+                "text_role": item.get("_text_role", item.get("text_role", "")),
                 "requested_pt": requested,
                 "effective_pt": effective,
                 "shrink_ratio": round(effective / max(requested, 0.01), 4),
             })
-    severe_adjustments = [
-        value for value in text_adjustments if float(value.get("shrink_ratio", 1)) < 0.75
-    ]
+        if item.get("_text_role"):
+            typography_adjustments.append({
+                "text_box": index,
+                "text_role": item["_text_role"],
+                "font_size_source": item.get("font_size_source", ""),
+                "effective_pt": float(item.get("font_size", 0)),
+                "requested_pt": float(item.get("_requested_font_size", item.get("font_size", 0))),
+            })
+    severe_adjustments = [value for value in text_adjustments if float(value.get("shrink_ratio", 1)) < 0.75]
+    role_shrink_warnings = []
+    for value in text_adjustments:
+        role = str(value.get("text_role") or "")
+        if role and float(value.get("shrink_ratio", 1)) < float(ROLE_SPECS[role]["shrink_warning"]):
+            role_shrink_warnings.append(value)
+
+    role_size_deviations = []
+    by_role: dict[str, list[tuple[int, dict]]] = {}
+    for index, item in enumerate(normalized.get("text_boxes", []), start=1):
+        role = str(item.get("_text_role") or "")
+        if role:
+            by_role.setdefault(role, []).append((index, item))
+    for role, values in by_role.items():
+        median = sorted(float(item.get("font_size", 0)) for _, item in values)[len(values) // 2]
+        for index, item in values:
+            effective = float(item.get("font_size", 0))
+            deviation = abs(effective - median) / max(median, 0.01)
+            if deviation > 0.05:
+                role_size_deviations.append({
+                    "text_box": index,
+                    "text_role": role,
+                    "effective_pt": effective,
+                    "role_median_pt": median,
+                    "deviation_ratio": round(deviation, 4),
+                    "measured_override": is_measured_text(item),
+                })
+
+    layer_objects = []
+    for key, kind in (("shapes", "shape"), ("images", "image"), ("tables", "table"), ("text_boxes", "text")):
+        for index, item in enumerate(normalized.get(key, []), start=1):
+            layer_objects.append({
+                "id": f"{kind}-{index}",
+                "kind": kind,
+                "index": index,
+                "layer": str(item.get("layer") or ""),
+                "z_index": float(item.get("_effective_z_index", item.get("z_index", 0))),
+                "box": {key: float(item[key]) for key in ("left", "top", "width", "height") if key in item},
+                "conflict": item.get("_layer_conflict"),
+            })
+    layer_objects.sort(key=lambda value: (value["z_index"], value["kind"], value["index"]))
+    layer_conflicts = [value for value in layer_objects if value.get("conflict")]
+    unlayered_overlaps = []
+    for first_index, first in enumerate(layer_objects):
+        if first["layer"]:
+            continue
+        for second in layer_objects[first_index + 1:]:
+            if second["layer"] or first["z_index"] != second["z_index"]:
+                continue
+            if boxes_overlap(first["box"], second["box"]):
+                unlayered_overlaps.append({"first": first["id"], "second": second["id"], "z_index": first["z_index"]})
+
+    warnings = []
+    if severe_adjustments:
+        warnings.append(f"{len(severe_adjustments)} text boxes were shrunk below 75% of requested size")
+    if role_shrink_warnings:
+        warnings.append(f"{len(role_shrink_warnings)} semantic text boxes exceeded their role shrink threshold")
+    unresolved_role_deviations = [value for value in role_size_deviations if not value["measured_override"]]
+    if unresolved_role_deviations:
+        warnings.append(f"{len(unresolved_role_deviations)} text boxes differ from their role median by more than 5% without measured evidence")
+    if layer_conflicts:
+        warnings.append(f"{len(layer_conflicts)} objects declare both layer and a conflicting z_index; z_index won")
+    if unlayered_overlaps:
+        warnings.append(f"{len(unlayered_overlaps)} same-z overlapping object pairs have no named layer")
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "output_pptx": str(Path(out_path).resolve()),
         "objects": {
             "shapes": len(normalized.get("shapes", [])),
@@ -1133,11 +1262,21 @@ def build_report(normalized, out_path):
             "text_boxes": len(normalized.get("text_boxes", [])),
         },
         "font_substitutions": substitutions,
+        "font_resolution": font_resolution,
+        "font_environment_fingerprint": font_environment_fingerprint(),
         "text_adjustments": text_adjustments,
         "severe_text_adjustments": severe_adjustments,
-        "warnings": ([
-            f"{len(severe_adjustments)} text boxes were shrunk below 75% of requested size"
-        ] if severe_adjustments else []),
+        "typography_adjustments": typography_adjustments,
+        "role_shrink_warnings": role_shrink_warnings,
+        "role_size_deviations": role_size_deviations,
+        "layer_report": {
+            "schema_version": 1,
+            "named_layer_defaults": LAYER_Z,
+            "objects": layer_objects,
+            "conflicts": layer_conflicts,
+            "unlayered_overlaps": unlayered_overlaps,
+        },
+        "warnings": warnings,
     }
 
 
@@ -1485,13 +1624,13 @@ def render_preview(manifest, manifest_path, out_path):
 
     layered = []
     for index, item in enumerate(manifest.get("shapes", [])):
-        layered.append((float(item.get("z_index", 100)), index, render_shape, item))
+        layered.append((float(item.get("_effective_z_index", item.get("z_index", 100))), index, render_shape, item))
     for index, item in enumerate(manifest.get("images", [])):
-        layered.append((float(item.get("z_index", 200)), index, render_image, item))
+        layered.append((float(item.get("_effective_z_index", item.get("z_index", 200))), index, render_image, item))
     for index, item in enumerate(manifest.get("tables", [])):
-        layered.append((float(item.get("z_index", 250)), index, render_table, item))
+        layered.append((float(item.get("_effective_z_index", item.get("z_index", 250))), index, render_table, item))
     for index, item in enumerate(manifest.get("text_boxes", [])):
-        layered.append((float(item.get("z_index", 300)), index, render_text, item))
+        layered.append((float(item.get("_effective_z_index", item.get("z_index", 300))), index, render_text, item))
     for _z_index, _order, renderer, item in sorted(layered, key=lambda entry: (entry[0], entry[1])):
         renderer(item)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)

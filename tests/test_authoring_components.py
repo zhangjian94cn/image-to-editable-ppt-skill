@@ -71,7 +71,7 @@ def test_components_build_native_connector_and_rich_table():
         assert "可编辑" in slide_xml and "单元格" in slide_xml
 
 
-def test_builder_resolves_unavailable_font_and_protects_single_line_title():
+def test_builder_preserves_powerpoint_private_font_and_protects_single_line_title():
     with tempfile.TemporaryDirectory() as temporary:
         page = Path(temporary)
         Image.new("RGB", (1600, 900), "white").save(page / "source.png")
@@ -88,13 +88,91 @@ def test_builder_resolves_unavailable_font_and_protects_single_line_title():
         built = run_cli("build", page)
         assert built.returncode == 0, built.stderr
         build_payload = json.loads(built.stdout)
-        assert build_payload["font_substitutions"]
+        resolution = build_payload["font_resolution"][0]
+        if Path("/Applications/Microsoft PowerPoint.app/Contents/Resources/DFonts/msyh.ttc").is_file():
+            assert not build_payload["font_substitutions"]
+            assert resolution["resolved"] == "Microsoft YaHei"
+            assert resolution["provider"] == "powerpoint-dfonts"
+        else:
+            assert build_payload["font_substitutions"]
         assert build_payload["text_adjustments"]
         deck = Presentation(str(page / "page.pptx"))
         shape = next(shape for shape in deck.slides[0].shapes if getattr(shape, "text", ""))
         run = shape.text_frame.paragraphs[0].runs[0]
-        assert run.font.name != "Microsoft YaHei"
+        if resolution["provider"] == "powerpoint-dfonts":
+            assert run.font.name == "Microsoft YaHei"
+        else:
+            assert run.font.name != "Microsoft YaHei"
         assert run.font.size.pt < 30.5
+
+
+def test_layered_header_uses_named_layers_and_masks_accent_behind_band():
+    with tempfile.TemporaryDirectory() as temporary:
+        page = Path(temporary)
+        Image.new("RGB", (1600, 900), "white").save(page / "source.png")
+        value = SlideManifest(1600, 900)
+        parts = value.add_layered_header(
+            [10, 45, 420, 300],
+            [10, 45, 420, 58],
+            [90, 91, 260, 18],
+            "整体使用分析",
+            title_font_size_px=32,
+        )
+        assert parts["container"]["layer"] == "container"
+        assert parts["accent"]["layer"] == "decoration_behind"
+        assert parts["band"]["layer"] == "band"
+        assert parts["title"]["layer"] == "text"
+        value.write(page / "manifest.json")
+
+        built = run_cli("build", page)
+
+        assert built.returncode == 0, built.stderr
+        payload = json.loads(built.stdout)
+        report = json.loads(Path(payload["layer_report"]).read_text())
+        ordered = [(item["layer"], item["z_index"]) for item in report["objects"]]
+        assert ordered == [
+            ("container", 100.0),
+            ("decoration_behind", 120.0),
+            ("band", 140.0),
+            ("text", 300.0),
+        ]
+        assert not report["conflicts"]
+
+
+def test_explicit_z_index_wins_over_named_layer_with_visible_warning():
+    with tempfile.TemporaryDirectory() as temporary:
+        page = Path(temporary)
+        Image.new("RGB", (1600, 900), "white").save(page / "source.png")
+        value = SlideManifest(1600, 900)
+        value.add_shape([100, 100, 300, 100], fill="#0087CF", layer="band", z_index=500)
+        value.write(page / "manifest.json")
+
+        built = run_cli("build", page)
+
+        assert built.returncode == 0, built.stderr
+        payload = json.loads(built.stdout)
+        report = json.loads(Path(payload["layer_report"]).read_text())
+        assert report["objects"][0]["z_index"] == 500.0
+        assert report["conflicts"][0]["conflict"]["layer_z"] == 140
+        assert any("z_index won" in warning for warning in payload["warnings"])
+
+
+def test_typography_roles_apply_page_scaled_defaults_and_warn_on_core_shrink():
+    with tempfile.TemporaryDirectory() as temporary:
+        page = Path(temporary)
+        Image.new("RGB", (3200, 1800), "white").save(page / "source.png")
+        value = SlideManifest(3200, 1800)
+        value.add_text([100, 100, 100, 30], "放不下的页面主标题", text_role="slide_title")
+        value.write(page / "manifest.json")
+
+        built = run_cli("build", page)
+
+        assert built.returncode == 0, built.stderr
+        payload = json.loads(built.stdout)
+        adjustment = payload["typography_adjustments"][0]
+        assert adjustment["text_role"] == "slide_title"
+        assert adjustment["font_size_source"] == "role_fallback"
+        assert any("role shrink threshold" in warning for warning in payload["warnings"])
 
 
 def test_builder_accepts_common_aliases_and_source_pixel_font_sizes():

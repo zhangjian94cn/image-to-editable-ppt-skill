@@ -9,7 +9,8 @@ groups, relative geometry, visual hierarchy, and aspect ratio. First view the
 whole image and inventory the major regions, including the footer and page
 number. Preserve small legal lines, captions, units, punctuation, and numbered
 steps verbatim; do not shorten or paraphrase text that is difficult to read.
-`source.png` plus the overlapping detail images listed in
+Start by running `editppt inspect evidence .` and reading
+`.editppt/evidence.json`. `source.png` plus the overlapping detail images listed in
 `.editppt/vision-inputs/vision-inputs.json` are attached to this same task.
 They are different views of the same slide, not additional slides. Use the
 detail views to read small and dense text exactly and map it back through each
@@ -38,10 +39,13 @@ later screenshot or other object, record only the visible fragment in
 legal phrase from the readable words. Treat OCR output only as a second
 opinion against this multimodal transcript.
 
-You may use the Skill's OCR,
+PaddleOCR-VL supplies positional text and glyph-height evidence when configured;
+Codex supplies semantic reading and conflict decisions. If Paddle is degraded,
+continue from the visibly labeled geometric evidence and do not describe it as
+complete OCR. You may use the Skill's OCR,
 layout, structure, source-pixel asset, Builder, text-fit, PowerPoint render,
 PPTX inspection, and comparison tools.
-After `editppt inspect text .`, run
+After the evidence command, run
 `editppt inspect transcript . --input source-transcript.json --against text_hints.json`.
 For every reported disagreement, re-view the relevant attached detail image;
 correct a real transcription error, or keep the source-visible reading and
@@ -51,8 +55,8 @@ record why the OCR evidence is wrong. Before finalizing, run
 each visible source line or explicitly verify that the OCR hint is wrong.
 
 `source.png` has already been normalized to the canonical authoring coordinate
-space used by Codex vision. Run `editppt inspect layout .`, use the returned
-`size_px` directly for the manifest, and keep every geometry/crop coordinate in
+space used by Codex vision. Use the layout entry indexed by `evidence.json`
+and its `size_px` directly for the manifest, and keep every geometry/crop coordinate in
 that space. Never bulk-rescale a completed manifest based on the chat preview
 or inferred display size. `editppt assets crop` automatically maps those
 coordinates back to the retained original pixels when a source map is present.
@@ -72,16 +76,28 @@ duplicate font fitting, table, connector, or OOXML packaging logic. For a
 source single-line title, use one text box with `wrap: none`; let the Builder
 resolve the installed font and fit it, and use `editppt text-fit` when the box
 remains tight.
+Before building, assign every text object a semantic `text_role` and every
+overlapping shape a named `layer`. Use the measured size groups indexed by
+`evidence.json`; the role defaults are a fallback only. The roles are
+`slide_title`, `lead`, `section_title`, `subheading`, `body`, `metric`,
+`caption`, and `footer`. For layered card headings prefer
+`SlideManifest.add_layered_header`, which builds
+`container → decoration_behind → band → text`.
+
 Use `font_size_px` when estimating a size from the source image; plain
 `font_size` is expressed in PowerPoint points. After each build, inspect the
-reported text adjustments. A shrink ratio below 0.75 is a layout defect to fix
-by correcting the coordinate space, box size, line grouping, or requested
-font—not a successful automatic fit.
+reported font resolution, text adjustments, role deviations, and
+`.editppt/layer-report.json`. Resolve a type mismatch in this order: font file,
+text-box dimensions, line grouping, then font size. Core roles shrinking below
+90%, or body text below 85%, require correction. Repair stacking with
+`layer`/`z_index`; do not move correctly measured source geometry to hide it.
 
 Generate `page.pptx`, run `editppt render` on that exact file, and view the
 resulting `preview.png`. Repair visible content omissions, overlaps, overflow,
 unexpected wrapping, and obvious geometry differences, then render again as
-needed. Do not declare success from a manifest preview, object count, or ZIP
+needed. The render is SHA-cached, and `editppt compare` produces local
+source/candidate difference regions; inspect those before repeating a whole
+page edit. Do not declare success from a manifest preview, object count, or ZIP
 check. If Microsoft PowerPoint cannot render the file, do not report ready.
 Keep product names, English identifiers, capitalization, uncommon spellings,
 and version strings exactly as shown. Do not rewrite a rare source term into a

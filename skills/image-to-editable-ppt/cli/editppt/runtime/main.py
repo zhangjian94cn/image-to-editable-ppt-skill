@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -32,6 +33,8 @@ from runtime_env import config_path, read_config_file
 from source_inspect import inspect_layout, inspect_structure
 from text_fit_tool import measure as measure_text
 from text_fit_tool import write_result as write_text_fit
+from font_registry import font_environment_fingerprint, resolve_font
+from typography import ROLE_SPECS, typography_hints
 from editppt.text_evidence import normalize_text, region_text_coverage
 from editppt.visual_inputs import prepare_visual_inputs
 
@@ -68,7 +71,17 @@ def _print_json(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _configured_paddle_token() -> str:
+    if os.environ.get("EDITPPT_DISABLE_PADDLE_OCR", "").strip().lower() in {"1", "true", "yes"}:
+        return ""
     token = os.environ.get("PADDLE_OCR_TOKEN", "").strip()
     if token:
         return token
@@ -183,16 +196,24 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_inspect_text(args: argparse.Namespace) -> int:
-    page_dir = Path(args.page_dir).expanduser().resolve()
-    source = page_dir / args.source
+def _collect_text_hints(
+    page_dir: Path,
+    *,
+    source_name: str,
+    out_name: str,
+    overlay_name: str,
+    detail_ocr: bool,
+) -> dict[str, Any]:
+    source = page_dir / source_name
     if not source.is_file():
-        print(f"source image not found: {source}", file=sys.stderr)
-        return 2
-    command: list[object] = [page_dir, "--source", args.source, "--out", args.out]
-    command += ["--overlay", args.overlay if args.overlay else ""]
+        raise FileNotFoundError(f"source image not found: {source}")
+    command: list[object] = [page_dir, "--source", source_name, "--out", out_name]
+    command += ["--overlay", overlay_name if overlay_name else ""]
     footer_path, footer_mappings = _write_footer_detail(source, page_dir)
     token = _configured_paddle_token()
+    ocr_status = "not_configured"
+    ocr_reason = "PADDLE_OCR_TOKEN is not configured"
+    paddle_succeeded = False
     if token:
         child_env = os.environ.copy()
         child_env["PADDLE_OCR_TOKEN"] = token
@@ -200,14 +221,19 @@ def cmd_inspect_text(args: argparse.Namespace) -> int:
         if completed.returncode != 0:
             reason = (completed.stderr or completed.stdout or "unknown OCR error").strip()
             print(f"content-aware OCR unavailable ({reason[:240]}); using geometric hints", file=sys.stderr)
+            ocr_status = "degraded"
+            ocr_reason = reason[:500]
             completed = _script("text_hints.py", *command, capture=True)
+        else:
+            ocr_status = "ready"
+            ocr_reason = ""
+            paddle_succeeded = True
     else:
         completed = _script("text_hints.py", *command, capture=True)
     if completed.returncode != 0:
-        print(completed.stderr or completed.stdout, file=sys.stderr)
-        return completed.returncode
-    hints = _json(page_dir / args.out)
-    if token and getattr(args, "detail_ocr", True):
+        raise RuntimeError((completed.stderr or completed.stdout or "text evidence failed").strip())
+    hints = _json(page_dir / out_name)
+    if paddle_succeeded and detail_ocr:
         footer_command: list[object] = [
             page_dir,
             "--source", str(footer_path.relative_to(page_dir)),
@@ -221,20 +247,126 @@ def cmd_inspect_text(args: argparse.Namespace) -> int:
         if footer_completed.returncode != 0:
             hints["footer_detail_warning"] = (footer_completed.stderr or footer_completed.stdout or "footer OCR failed").strip()[:240]
     hints = _merge_footer_hints(page_dir, hints, footer_path, footer_mappings)
-    (page_dir / args.out).write_text(json.dumps(hints, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    hints["ocr"] = {
+        "status": ocr_status,
+        "configured": bool(token),
+        "provider": "paddleocr-vl" if paddle_succeeded else "local-geometric",
+        "model": os.environ.get("PADDLE_OCR_MODEL", "PaddleOCR-VL-1.6") if token else "",
+        "degraded_reason": ocr_reason,
+    }
+    (page_dir / out_name).write_text(json.dumps(hints, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     lines = hints.get("lines") if isinstance(hints.get("lines"), list) else []
     backend = str(hints.get("backend") or hints.get("source") or "local-geometric")
     real_ocr = backend not in {"local", "local-geometric", "geometric", "projection-components"}
-    _print_json({
+    return {
         "status": "ready",
         "provider": backend,
         "real_ocr": real_ocr,
-        "text_hints": str(page_dir / args.out),
-        "overlay": str(page_dir / args.overlay) if args.overlay else "",
+        "ocr": hints["ocr"],
+        "text_hints": str(page_dir / out_name),
+        "overlay": str(page_dir / overlay_name) if overlay_name else "",
         "detail_images": hints.get("detail_images", []),
         "footer_detail_added_lines": int(hints.get("footer_detail_added_lines") or 0),
         "line_count": len(lines),
-    })
+    }
+
+
+def cmd_inspect_text(args: argparse.Namespace) -> int:
+    page_dir = Path(args.page_dir).expanduser().resolve()
+    payload = _collect_text_hints(
+        page_dir,
+        source_name=args.source,
+        out_name=args.out,
+        overlay_name=args.overlay,
+        detail_ocr=getattr(args, "detail_ocr", True),
+    )
+    _print_json(payload)
+    return 0
+
+
+def cmd_inspect_evidence(args: argparse.Namespace) -> int:
+    """Build one cached evidence index for the page-owning Codex task."""
+
+    page = Path(args.page_dir).expanduser().resolve()
+    source = page / args.source
+    if not source.is_file():
+        print(f"source image not found: {source}", file=sys.stderr)
+        return 2
+    editppt_dir = page / ".editppt"
+    editppt_dir.mkdir(parents=True, exist_ok=True)
+    output = editppt_dir / "evidence.json"
+    font_fingerprint = font_environment_fingerprint()
+    contract = _json(SKILL_ROOT / "skill.json")
+    cache_inputs = {
+        "source_sha256": _sha256(source),
+        "paddle_configured": bool(_configured_paddle_token()),
+        "paddle_model": os.environ.get("PADDLE_OCR_MODEL", "PaddleOCR-VL-1.6"),
+        "skill_contract_version": str(contract.get("contract_version") or "unknown"),
+        "font_environment_fingerprint": font_fingerprint,
+    }
+    cache_key = hashlib.sha256(json.dumps(cache_inputs, sort_keys=True).encode()).hexdigest()
+    cached = _json(output)
+    if cached.get("cache_key") == cache_key:
+        required = [
+            cached.get("visual_inputs", {}).get("manifest"),
+            cached.get("text", {}).get("text_hints"),
+            cached.get("layout", {}).get("path"),
+            cached.get("structure", {}).get("path"),
+            cached.get("typography", {}).get("path"),
+        ]
+        if all(value and Path(str(value)).is_file() for value in required):
+            cached["cache_hit"] = True
+            _print_json(cached)
+            return 0
+
+    visual = prepare_visual_inputs(
+        page,
+        source_name=args.source,
+        output_dir=args.vision_out_dir,
+        target_edge=args.target_edge,
+        overlap_ratio=args.overlap_ratio,
+    )
+    text = _collect_text_hints(
+        page,
+        source_name=args.source,
+        out_name=args.text_out,
+        overlay_name=args.text_overlay,
+        detail_ocr=args.detail_ocr,
+    )
+    layout_path = editppt_dir / "layout.json"
+    structure_path = editppt_dir / "structure.json"
+    layout = inspect_layout(source, layout_path)
+    structure = inspect_structure(source, structure_path)
+    with Image.open(source) as image:
+        source_size = [image.width, image.height]
+    text_payload = _json(page / args.text_out)
+    typography = typography_hints(text_payload, source_size[1])
+    typography_path = editppt_dir / "typography-hints.json"
+    typography_path.write_text(json.dumps(typography, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    payload = {
+        "schema_version": 1,
+        "status": "ready",
+        "cache_key": cache_key,
+        "cache_hit": False,
+        "cache_inputs": cache_inputs,
+        "source": {"path": str(source), "size_px": source_size, "sha256": cache_inputs["source_sha256"]},
+        "visual_inputs": {
+            "provider": visual["provider"],
+            "manifest": visual["manifest"],
+            "images": [value["path"] for value in visual["images"]],
+        },
+        "text": text,
+        "layout": {"path": str(layout_path), "summary": layout},
+        "structure": {"path": str(structure_path), "summary": structure},
+        "typography": {"path": str(typography_path), "size_groups": typography["size_groups"]},
+        "font_environment_fingerprint": font_fingerprint,
+        "instruction": (
+            "Read this index before authoring. OCR is positional evidence; Codex remains responsible "
+            "for semantic roles, exact source reading, and conflict resolution."
+        ),
+    }
+    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _print_json(payload)
     return 0
 
 
@@ -393,13 +525,24 @@ def cmd_build(args: argparse.Namespace) -> int:
         print(completed.stderr or completed.stdout, file=sys.stderr)
         return completed.returncode
     report = _json(build_report)
+    layer_report = page / ".editppt/layer-report.json"
+    layer_report.parent.mkdir(parents=True, exist_ok=True)
+    layer_report.write_text(
+        json.dumps(report.get("layer_report", {}), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     _print_json({
         "status": "ready",
         "output_pptx": str(page / args.out),
         "build_report": str(build_report),
+        "layer_report": str(layer_report),
         "font_substitutions": report.get("font_substitutions", []),
+        "font_resolution": report.get("font_resolution", []),
+        "font_environment_fingerprint": report.get("font_environment_fingerprint", ""),
         "text_adjustments": report.get("text_adjustments", []),
         "severe_text_adjustments": report.get("severe_text_adjustments", []),
+        "typography_adjustments": report.get("typography_adjustments", []),
+        "role_size_deviations": report.get("role_size_deviations", []),
         "warnings": report.get("warnings", []),
         "draft_preview": str(page / draft_preview) if draft_preview else "",
         "warning": "draft preview is not a Microsoft PowerPoint render" if draft_preview else "",
@@ -409,6 +552,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 def cmd_text_fit(args: argparse.Namespace) -> int:
     text = Path(args.text_file).read_text(encoding="utf-8") if args.text_file else args.text
+    profile = _json(Path(args.typography_profile).expanduser().resolve()) if args.typography_profile else None
     payload = measure_text(
         text,
         args.width_px,
@@ -418,6 +562,8 @@ def cmd_text_fit(args: argparse.Namespace) -> int:
         min_font_px=args.min_font_px,
         line_spacing=args.line_spacing,
         single_line=args.single_line,
+        role=args.role,
+        typography_profile=profile,
     )
     if args.out:
         write_text_fit(Path(args.out).expanduser().resolve(), payload)
@@ -478,6 +624,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         },
         "pdf_to_png": {"available": bool(shutil.which("pdftoppm")), "path": shutil.which("pdftoppm") or ""},
         "rsvg_convert": {"available": bool(shutil.which("rsvg-convert")), "path": shutil.which("rsvg-convert") or ""},
+        "font_registry": {
+            "available": bool(resolve_font("Microsoft YaHei", require_cjk=True)),
+            "fingerprint": font_environment_fingerprint(),
+            "microsoft_yahei": (
+                resolve_font("Microsoft YaHei", require_cjk=True).as_dict()
+                if resolve_font("Microsoft YaHei", require_cjk=True)
+                else {}
+            ),
+        },
     }
     payload["skill"] = {
         "root": str(SKILL_ROOT),
@@ -540,6 +695,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     inspect = sub.add_parser("inspect", help="Inspect source evidence or the authored PPTX.")
     inspect_sub = inspect.add_subparsers(dest="inspect_command", required=True)
+    inspect_evidence = inspect_sub.add_parser(
+        "evidence",
+        help="Create the cached multimodal, OCR, layout, structure, typography, and font evidence index.",
+    )
+    inspect_evidence.add_argument("page_dir")
+    inspect_evidence.add_argument("--source", default="source.png")
+    inspect_evidence.add_argument("--text-out", default="text_hints.json")
+    inspect_evidence.add_argument("--text-overlay", default="text_hints.png")
+    inspect_evidence.add_argument("--vision-out-dir", default=str(Path(".editppt/vision-inputs")))
+    inspect_evidence.add_argument("--target-edge", type=int, default=1792)
+    inspect_evidence.add_argument("--overlap-ratio", type=float, default=0.08)
+    inspect_evidence.add_argument(
+        "--detail-ocr",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run a second OCR pass on the enlarged footer when PaddleOCR-VL succeeds.",
+    )
+    inspect_evidence.set_defaults(func=cmd_inspect_evidence)
     inspect_text = inspect_sub.add_parser("text", help="Write OCR/text coordinate evidence.")
     inspect_text.add_argument("page_dir")
     inspect_text.add_argument("--source", default="source.png")
@@ -656,6 +829,8 @@ def build_parser() -> argparse.ArgumentParser:
     text_fit.add_argument("--min-font-px", type=int, default=6)
     text_fit.add_argument("--line-spacing", type=float, default=1.2)
     text_fit.add_argument("--single-line", action="store_true")
+    text_fit.add_argument("--role", choices=tuple(ROLE_SPECS), default="")
+    text_fit.add_argument("--typography-profile", default="")
     text_fit.add_argument("--out", default="")
     text_fit.set_defaults(func=cmd_text_fit)
 

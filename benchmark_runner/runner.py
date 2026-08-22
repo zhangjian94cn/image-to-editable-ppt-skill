@@ -645,6 +645,41 @@ def _skill_trace(*paths: Path) -> list[CommandEvidence]:
     return evidence
 
 
+def _skill_diagnostics(work: Path) -> dict[str, Any]:
+    """Project deterministic Skill diagnostics into the compact snapshot."""
+
+    build = _read_json(work / ".editppt/build.json")
+    layers = _read_json(work / ".editppt/layer-report.json")
+    evidence = _read_json(work / ".editppt/evidence.json")
+    role_deviations = [
+        value for value in build.get("role_size_deviations", [])
+        if isinstance(value, dict) and not value.get("measured_override")
+    ]
+    max_role_deviation = max(
+        (float(value.get("deviation_ratio") or 0) for value in role_deviations),
+        default=0.0,
+    )
+    text = evidence.get("text") if isinstance(evidence.get("text"), dict) else {}
+    ocr = text.get("ocr") if isinstance(text.get("ocr"), dict) else {}
+    return {
+        "font_environment_fingerprint": str(build.get("font_environment_fingerprint") or evidence.get("font_environment_fingerprint") or ""),
+        "font_substitution_count": len(build.get("font_substitutions") or []),
+        "powerpoint_dfonts_resolution_count": sum(
+            1 for value in build.get("font_resolution", [])
+            if isinstance(value, dict) and value.get("provider") == "powerpoint-dfonts"
+        ),
+        "typography_adjustment_count": len(build.get("typography_adjustments") or []),
+        "role_shrink_warning_count": len(build.get("role_shrink_warnings") or []),
+        "role_size_deviation_count": len(role_deviations),
+        "max_role_size_deviation_ratio": round(max_role_deviation, 4),
+        "layer_conflict_count": len(layers.get("conflicts") or []),
+        "unlayered_overlap_count": len(layers.get("unlayered_overlaps") or []),
+        "evidence_cache_hit": evidence.get("cache_hit") if evidence else None,
+        "ocr_status": str(ocr.get("status") or "missing"),
+        "ocr_provider": str(ocr.get("provider") or "missing"),
+    }
+
+
 def _issues(
     metrics: dict[str, Any],
     render_error: str = "",
@@ -713,6 +748,27 @@ def _issues(
         issues.append({"severity": "P1", "category": "editability", "message": f"单个图片覆盖页面 {picture:.1%}"})
     if int(metrics.get("out_of_bounds_count") or 0):
         issues.append({"severity": "P1", "category": "layout", "message": f"{metrics['out_of_bounds_count']} 个对象越出画布"})
+    if int(metrics.get("role_shrink_warning_count") or 0):
+        issues.append({
+            "severity": "P1",
+            "category": "font",
+            "message": f"{metrics['role_shrink_warning_count']} 个核心文字对象自动缩字超过角色阈值",
+        })
+    if int(metrics.get("role_size_deviation_count") or 0):
+        issues.append({
+            "severity": "P1",
+            "category": "font",
+            "message": f"{metrics['role_size_deviation_count']} 个同角色文字对象字号离散超过 5%",
+        })
+    if int(metrics.get("layer_conflict_count") or 0) or int(metrics.get("unlayered_overlap_count") or 0):
+        issues.append({
+            "severity": "P1",
+            "category": "layer",
+            "message": (
+                f"图层冲突 {int(metrics.get('layer_conflict_count') or 0)} 个，"
+                f"未声明同层重叠 {int(metrics.get('unlayered_overlap_count') or 0)} 对"
+            ),
+        })
     coarse = float(metrics.get("coarse_rgb_loss") or 0.0)
     ink = float(metrics.get("content_ink_loss") or 0.0)
     if coarse >= 0.1 or ink >= 0.1:
@@ -768,6 +824,10 @@ def _report(
         "source_transcript_line_count", "source_transcript_uncertain_count",
         "coarse_rgb_loss", "content_ink_loss", "out_of_bounds_count",
         "codex_powerpoint_rendered",
+        "font_substitution_count", "powerpoint_dfonts_resolution_count",
+        "role_shrink_warning_count", "role_size_deviation_count",
+        "max_role_size_deviation_ratio", "layer_conflict_count",
+        "unlayered_overlap_count", "evidence_cache_hit", "ocr_status", "ocr_provider",
     ):
         if name in metrics and metrics[name] is not None:
             lines.append(f"| `{name}` | `{metrics[name]}` |")
@@ -887,6 +947,7 @@ def _run_page(
         if rendered:
             metrics.update(_visual_metrics(page_dir / "source.png", page_dir / "candidate.png", compare_dir))
         outcome.metrics.update(metrics)
+        outcome.metrics.update(_skill_diagnostics(work))
         outcome.verdict, outcome.issues = _issues(
             outcome.metrics,
             render_error,
@@ -928,6 +989,24 @@ def _summary(run_dir: Path, run_meta: dict[str, Any], outcomes: Iterable[PageOut
         for issue in value.issues:
             key = f"{issue.get('severity')}:{issue.get('category')}"
             issue_counts[key] = issue_counts.get(key, 0) + 1
+    elapsed_values = sorted(value.elapsed_sec for value in values)
+    p50 = float(np.percentile(elapsed_values, 50)) if elapsed_values else 0.0
+    p95 = float(np.percentile(elapsed_values, 95)) if elapsed_values else 0.0
+    font_substitutions = sum(int(value.metrics.get("font_substitution_count") or 0) for value in values)
+    layer_issues = sum(
+        int(value.metrics.get("layer_conflict_count") or 0)
+        + int(value.metrics.get("unlayered_overlap_count") or 0)
+        for value in values
+    )
+    cache_values = [
+        value.metrics.get("evidence_cache_hit") for value in values
+        if value.metrics.get("evidence_cache_hit") is not None
+    ]
+    cache_hits = sum(1 for value in cache_values if value)
+    skill_usage: dict[str, int] = {}
+    for value in values:
+        for command in value.skill_commands:
+            skill_usage[command.command] = skill_usage.get(command.command, 0) + 1
     lines = [
         f"# Image-to-Editable-PPT Benchmark：{run_meta['label']}", "",
         f"- Run ID：`{run_meta['run_id']}`",
@@ -935,6 +1014,7 @@ def _summary(run_dir: Path, run_meta: dict[str, Any], outcomes: Iterable[PageOut
         f"- Skill：`{run_meta['skill']['commit']}`",
         f"- 页面：{len(values)}",
         f"- 总耗时：{_seconds(sum(value.elapsed_sec for value in values))}",
+        f"- 单页耗时 P50 / P95：{_seconds(p50)} / {_seconds(p95)}（仅优化指标，不中止任务）",
         "", "## 结论分布", "", "| 结论 | 页数 |", "|---|---:|",
     ]
     lines.extend(f"| `{name}` | {count} |" for name, count in sorted(counts.items()))
@@ -950,6 +1030,17 @@ def _summary(run_dir: Path, run_meta: dict[str, Any], outcomes: Iterable[PageOut
         lines.extend(f"- `{name}`：{count}" for name, count in sorted(issue_counts.items()))
     else:
         lines.append("- 无自动诊断问题。")
+    lines += [
+        "", "## 字体、图层与缓存", "",
+        f"- 字体替换：{font_substitutions}",
+        f"- 图层冲突或未声明同层重叠：{layer_issues}",
+        f"- 证据缓存命中：{cache_hits}/{len(cache_values)}" if cache_values else "- 证据缓存命中：无数据",
+        "", "## Skill 命令使用率", "",
+    ]
+    if skill_usage:
+        lines.extend(f"- `{name}`：{count}" for name, count in sorted(skill_usage.items()))
+    else:
+        lines.append("- 无记录。")
     (run_dir / "SUMMARY.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

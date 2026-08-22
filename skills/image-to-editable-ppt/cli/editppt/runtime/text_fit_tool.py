@@ -4,80 +4,21 @@
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from PIL import ImageFont
 
-
-FONT_DIRS = (
-    Path("/System/Library/Fonts"),
-    Path("/Library/Fonts"),
-    Path.home() / "Library/Fonts",
-)
-
-PORTABLE_CJK_FALLBACKS = {
-    "microsoft yahei": "PingFang SC",
-    "microsoft yahei ui": "PingFang SC",
-    "微软雅黑": "PingFang SC",
-    "dengxian": "PingFang SC",
-    "等线": "PingFang SC",
-    "simhei": "Heiti SC",
-    "黑体": "Heiti SC",
-}
+from font_registry import find_font, font_environment_fingerprint, resolve_font
+from typography import ROLE_SPECS
 
 
-def _fontconfig_match(query: str) -> tuple[Path | None, str]:
-    executable = shutil.which("fc-match")
-    if not executable:
-        return None, ""
-    completed = subprocess.run(
-        [executable, "-f", "%{family[0]}\t%{file}\n", query or "sans-serif"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    first = completed.stdout.splitlines()[0] if completed.stdout.strip() else ""
-    family, separator, filename = first.partition("\t")
-    candidate = Path(filename) if separator else None
-    if candidate and candidate.is_file():
-        return candidate.resolve(), family.strip() or candidate.stem
-    return None, ""
-
-
-def find_font(preferred: str) -> tuple[Path | None, str]:
-    query = preferred.strip()
-    if query:
-        direct = Path(query).expanduser()
-        if direct.is_file():
-            return direct.resolve(), direct.stem
-    portable = PORTABLE_CJK_FALLBACKS.get(query.casefold(), query)
-    for name in filter(None, (portable, query)):
-        matched_path, matched_family = _fontconfig_match(name)
-        if matched_path and (name == portable or matched_family.casefold() == query.casefold()):
-            return matched_path, matched_family
-    names = [portable, query, "PingFang SC", "Heiti SC", "Noto Sans CJK SC", "Arial Unicode MS"]
-    for name in filter(None, names):
-        token = name.casefold().replace(" ", "")
-        for directory in FONT_DIRS:
-            if not directory.is_dir():
-                continue
-            for suffix in ("*.ttf", "*.ttc", "*.otf"):
-                for candidate in directory.rglob(suffix):
-                    if token in candidate.stem.casefold().replace(" ", ""):
-                        return candidate.resolve(), name
-    matched_path, matched_family = _fontconfig_match(portable or query or "sans-serif")
-    if matched_path:
-        return matched_path, matched_family
-    return None, query or "default"
-
-
-def _font(path: Path | None, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+@lru_cache(maxsize=2048)
+def _font(path: Path | None, size: int, face_index: int = 0) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     if path:
         try:
-            return ImageFont.truetype(str(path), size=size)
+            return ImageFont.truetype(str(path), size=size, index=face_index)
         except OSError:
             pass
     return ImageFont.load_default()
@@ -93,15 +34,30 @@ def measure(
     min_font_px: int = 6,
     line_spacing: float = 1.2,
     single_line: bool = False,
+    role: str = "",
+    typography_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if width_px <= 0 or height_px <= 0:
         raise ValueError("width and height must be positive")
-    font_path, font_name = find_font(preferred_font)
+    if role and role not in ROLE_SPECS:
+        raise ValueError(f"unknown text role: {role}")
+    role_profile = dict(ROLE_SPECS.get(role, {}))
+    if typography_profile:
+        configured = typography_profile.get("roles", {}).get(role, {}) if role else {}
+        if isinstance(configured, dict):
+            role_profile.update(configured)
+    if role:
+        max_font_px = min(max_font_px, int(round(float(role_profile.get("max_px", max_font_px)))))
+        min_font_px = max(min_font_px, int(round(float(role_profile.get("min_px", min_font_px)))))
+    face = resolve_font(preferred_font, require_cjk=any("\u4e00" <= char <= "\u9fff" for char in text))
+    font_path = Path(face.path) if face else None
+    font_name = face.family if face else (preferred_font or "default")
+    face_index = face.face_index if face else 0
     text = str(text)
     chosen = min_font_px
     measured = (0, 0)
     for size in range(max_font_px, min_font_px - 1, -1):
-        font = _font(font_path, size)
+        font = _font(font_path, size, face_index)
         lines = text.splitlines() or [""]
         widths = [font.getlength(line) for line in lines]
         bbox = font.getbbox("国Ag")
@@ -111,7 +67,7 @@ def measure(
             chosen = size
             measured = candidate
             break
-    font = _font(font_path, chosen)
+    font = _font(font_path, chosen, face_index)
     raw_width = int(round(font.getlength(text.replace("\n", ""))))
     result = {
         "schema_version": 1,
@@ -119,6 +75,12 @@ def measure(
         "box_px": [width_px, height_px],
         "font": font_name,
         "font_path": str(font_path) if font_path else "",
+        "font_face_index": face_index,
+        "font_sha256": face.sha256 if face else "",
+        "font_provider": face.provider if face else "",
+        "font_environment_fingerprint": font_environment_fingerprint(),
+        "role": role,
+        "role_profile": role_profile,
         "recommended_font_px": chosen,
         "measured_px": list(measured),
         "single_line": single_line,

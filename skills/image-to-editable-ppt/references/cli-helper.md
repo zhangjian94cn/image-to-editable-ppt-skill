@@ -16,6 +16,7 @@ Normalizes images, PDFs, or visual PPTX files into ordered page directories.
 ## Inspect
 
 ```bash
+editppt inspect evidence /page
 editppt inspect vision /page
 editppt inspect text /page
 editppt inspect transcript /page --input source-transcript.json --against text_hints.json
@@ -24,6 +25,10 @@ editppt inspect structure /page
 editppt inspect pptx /page --input page.pptx
 ```
 
+- `evidence`: the normal first command. It indexes local multimodal crops,
+  Paddle/local text evidence, layout, structure, typography size groups, and
+  the font environment in `.editppt/evidence.json`. The cache key binds source
+  SHA, Paddle model/configuration, Skill contract, and font fingerprint.
 - `vision`: four overlapping source-pixel detail views plus three footer detail
   view for the same multimodal Codex task. Its JSON maps every crop back to
   canonical `source.png` coordinates. It is deterministic image preparation,
@@ -74,7 +79,8 @@ the original pixels. Its JSON records both authoring and original boxes.
 ```bash
 editppt build /page
 editppt build /page --draft-preview manifest-draft.png
-editppt text-fit --text '单行标题' --width-px 900 --height-px 80 --single-line
+editppt text-fit --text '单行标题' --width-px 900 --height-px 80 \
+  --role slide_title --typography-profile typography.json --single-line
 ```
 
 `build` uses the shared manifest Builder. A draft preview is optional and is
@@ -82,8 +88,10 @@ explicitly not a PowerPoint render. `text-fit` measures installed fonts and
 returns source-pixel measurements; convert pixels to points using the actual
 source-to-slide scale.
 The manifest may instead use `font_size_px`, which performs this conversion
-deterministically. Review `text_adjustments`; shrink ratios below 0.75 require
-an authoring correction before declaring the page ready.
+deterministically. The font resolver searches PowerPoint `DFonts` as well as
+user/system/explicit roots. Review `font_resolution`, role diagnostics,
+`text_adjustments`, and `.editppt/layer-report.json`; core-role shrink below
+90% and body shrink below 85% require an authoring correction.
 
 ## True render and compare
 
@@ -96,8 +104,10 @@ editppt compare /page --source source.png --candidate preview.png
 opens, and binds `preview.png` to the exact `page.pptx` SHA. The Skill-owned
 renderer opens only a collision-proof copy of the target; it does not create a
 separate canary or close unrelated presentations. It never falls back to
-LibreOffice or the manifest draft. `compare` writes overlay, diff, heatmap, and
-coarse diagnostic metrics; Codex must still view the images.
+LibreOffice or the manifest draft. Identical PPTX SHA, PowerPoint version, DPI,
+and output binding reuse the prior render. `compare` writes overlay, diff,
+heatmap, coarse metrics, and clustered local source/candidate crops; Codex must
+still view the images.
 
 ## Assemble and diagnose
 

@@ -24,6 +24,11 @@ uv run --project skills/image-to-editable-ppt/cli python -m benchmark_runner run
   --skill-root /absolute/image-to-editable-ppt-skill/skills/image-to-editable-ppt
 ```
 
+The intended optimization sequence is the frozen Round 0 baseline, targeted
+Round 1 (dashboard, timeline, and Lingxi), core 10-page Round 2, then the full
+17-page Round 3. Single-page P50 <= 5 minutes and P95 <= 10 minutes are report
+targets only; they never terminate a page task.
+
 Successful page snapshots contain only `source.png`, `candidate.pptx`, the
 Microsoft PowerPoint-rendered `candidate.png`, `report.md`, and `artifacts/`.
 Failed pages never receive placeholder candidate files.

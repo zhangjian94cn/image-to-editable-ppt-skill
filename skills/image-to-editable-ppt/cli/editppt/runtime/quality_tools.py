@@ -79,6 +79,21 @@ def render_powerpoint(
     if renderer is None:
         raise RuntimeError("Skill-owned PowerPoint renderer is unavailable")
     candidate_sha = sha256(pptx_path)
+    binding_path = evidence_dir / "render-binding.json"
+    try:
+        cached = json.loads(binding_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        cached = {}
+    if (
+        cached.get("input_sha256") == candidate_sha
+        and cached.get("renderer_version") == powerpoint_version()
+        and int(cached.get("dpi") or 0) == int(dpi)
+        and Path(str(cached.get("output_png") or "")).resolve() == output_png
+        and output_png.is_file()
+        and cached.get("output_sha256") == sha256(output_png)
+    ):
+        cached["cache_hit"] = True
+        return cached
     report = render_one_page(
         pptx_path,
         output_png,
@@ -101,8 +116,9 @@ def render_powerpoint(
         "renderer_report": str(report_path),
         "target_only": True,
         "canary_created": False,
+        "cache_hit": False,
     }
-    write_json(evidence_dir / "render-binding.json", bound)
+    write_json(binding_path, bound)
     return bound
 
 
@@ -232,6 +248,63 @@ def compare_images(source: Path, candidate: Path, out_dir: Path) -> dict[str, An
         heat_rgb.save(heat_path)
         overlay.save(overlay_path)
         diff.save(diff_path)
+        # Cluster meaningful differences on a compact tile grid.  These
+        # source/candidate pairs let Codex inspect only the regions that
+        # changed instead of re-reading the entire page after every repair.
+        difference_mask = delta.max(axis=2) > 0.12
+        rows, columns = 18, 32
+        tile_h = max(1, int(np.ceil(source_image.height / rows)))
+        tile_w = max(1, int(np.ceil(source_image.width / columns)))
+        active: set[tuple[int, int]] = set()
+        for row in range(rows):
+            for column in range(columns):
+                tile = difference_mask[
+                    row * tile_h : min(source_image.height, (row + 1) * tile_h),
+                    column * tile_w : min(source_image.width, (column + 1) * tile_w),
+                ]
+                if tile.size and float(tile.mean()) >= 0.04:
+                    active.add((row, column))
+        components: list[list[tuple[int, int]]] = []
+        while active:
+            stack = [active.pop()]
+            component = []
+            while stack:
+                current = stack.pop()
+                component.append(current)
+                row, column = current
+                for neighbor in ((row - 1, column), (row + 1, column), (row, column - 1), (row, column + 1)):
+                    if neighbor in active:
+                        active.remove(neighbor)
+                        stack.append(neighbor)
+            components.append(component)
+        components.sort(key=len, reverse=True)
+        region_dir = out_dir / "regions"
+        region_dir.mkdir(parents=True, exist_ok=True)
+        for stale in region_dir.glob("*.png"):
+            stale.unlink()
+        regions = []
+        for index, component in enumerate(components[:12], start=1):
+            region_rows = [value[0] for value in component]
+            region_columns = [value[1] for value in component]
+            left = max(0, min(region_columns) * tile_w - tile_w // 2)
+            top = max(0, min(region_rows) * tile_h - tile_h // 2)
+            right = min(source_image.width, (max(region_columns) + 1) * tile_w + tile_w // 2)
+            bottom = min(source_image.height, (max(region_rows) + 1) * tile_h + tile_h // 2)
+            box = (left, top, right, bottom)
+            source_crop = region_dir / f"region-{index:02d}-source.png"
+            candidate_crop = region_dir / f"region-{index:02d}-candidate.png"
+            diff_crop = region_dir / f"region-{index:02d}-diff.png"
+            source_image.crop(box).save(source_crop)
+            candidate_fitted.crop(box).save(candidate_crop)
+            diff.crop(box).save(diff_crop)
+            regions.append({
+                "id": f"region-{index:02d}",
+                "box_px": [left, top, right - left, bottom - top],
+                "tile_count": len(component),
+                "source": str(source_crop),
+                "candidate": str(candidate_crop),
+                "diff": str(diff_crop),
+            })
     report = {
         "schema_version": 1,
         "source": str(source.resolve()),
@@ -243,6 +316,7 @@ def compare_images(source: Path, candidate: Path, out_dir: Path) -> dict[str, An
         "diff": str(diff_path),
         "heatmap": str(heat_path),
         "overlay": str(overlay_path),
+        "regions": regions,
         "note": "Diagnostic evidence only; inspect region geometry and text directly.",
     }
     write_json(out_dir / "compare.json", report)

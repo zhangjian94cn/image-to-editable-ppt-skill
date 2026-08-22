@@ -37,6 +37,9 @@ dashboard or simple diagram merely to finish faster.
   low-contrast text.
 - Use measured OCR boxes as evidence; merge fragmented lines when they form one
   paragraph.
+- Assign each text object a semantic role and use measured size groups before
+  the resolution-scaled role fallback. Diagnose a mismatch in font-file,
+  text-box, line-break, then font-size order.
 - Build a small region inventory before authoring dense pages. Count the major
   columns, panels, stages, tables and footer bands visible in the source, then
   make sure each region is represented in the editable result. OCR may miss an
@@ -47,6 +50,15 @@ dashboard or simple diagram merely to finish faster.
   titles remain single-line; measure instead of letting PowerPoint wrap them.
 - Keep rich phrases in one box and use runs for emphasis instead of forcing OCR
   fragments into separate objects.
+
+## Overlap and stacking
+
+Overlapping objects must use named layers. Prefer `background`, `container`,
+`decoration_behind`, `band`, `content`, `decoration_front`, `text`, then
+`overlay`. A card accent intended to peek below its title band belongs in
+`decoration_behind`; moving it away from the measured source position only
+hides the actual stack bug. Use explicit `z_index` only for a source stack that
+the named layers cannot express, and review the resulting conflict report.
 
 ## Final judgment
 

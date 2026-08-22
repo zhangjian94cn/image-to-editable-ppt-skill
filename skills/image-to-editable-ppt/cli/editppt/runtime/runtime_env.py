@@ -44,7 +44,7 @@ def collect_status() -> dict:
     token = os.environ.get("PADDLE_OCR_TOKEN", "").strip() or str(configured.get("PADDLE_OCR_TOKEN") or "").strip()
     dependencies = {
         module: importlib.util.find_spec(module) is not None
-        for module in ("fitz", "PIL", "pptx", "yaml", "numpy", "requests")
+        for module in ("fitz", "PIL", "pptx", "yaml", "numpy", "requests", "fontTools")
     }
     commands = {name: shutil.which(name) or "" for name in ("codex", "pdftoppm", "rsvg-convert", "osascript")}
     return {

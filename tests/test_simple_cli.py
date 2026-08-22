@@ -222,7 +222,7 @@ class SimpleCliTest(unittest.TestCase):
     def test_doctor_reports_contract_version(self):
         completed = run_cli("doctor", "--json")
         payload = json.loads(completed.stdout)
-        self.assertEqual("benchmark-driven-page-v3", payload["skill"]["contract_version"])
+        self.assertEqual("typography-layer-evidence-v4", payload["skill"]["contract_version"])
         powerpoint_ready = payload["editppt_checks"]["powerpoint"]["available"]
         renderer_ready = payload["editppt_checks"]["powerpoint_renderer"]["available"]
         self.assertEqual(0 if powerpoint_ready and renderer_ready else 1, completed.returncode)
@@ -254,6 +254,61 @@ class SimpleCliTest(unittest.TestCase):
 
             self.assertEqual("paddle_text_hints.py", calls[0][0])
             self.assertEqual("secret-value", calls[0][1]["PADDLE_OCR_TOKEN"])
+
+    def test_inspect_surfaces_paddle_failure_as_visible_geometric_degradation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            page = Path(temporary)
+            Image.new("RGB", (160, 90), "white").save(page / "source.png")
+
+            def fake_script(name: str, *argv: object, capture: bool = False, env=None):
+                if name == "paddle_text_hints.py":
+                    return subprocess.CompletedProcess([], 1, "", "service timed out")
+                (page / "text_hints.json").write_text(
+                    json.dumps({"backend": "local-geometric", "lines": []}),
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess([], 0, "", "")
+
+            args = SimpleNamespace(
+                page_dir=page,
+                source="source.png",
+                out="text_hints.json",
+                overlay="text_hints.png",
+                detail_ocr=False,
+            )
+            with mock.patch.object(runtime_main, "_configured_paddle_token", return_value="secret-value"), mock.patch.object(
+                runtime_main, "_script", side_effect=fake_script
+            ):
+                self.assertEqual(0, runtime_main.cmd_inspect_text(args))
+
+            hints = json.loads((page / "text_hints.json").read_text())
+            self.assertEqual("degraded", hints["ocr"]["status"])
+            self.assertEqual("local-geometric", hints["ocr"]["provider"])
+            self.assertIn("timed out", hints["ocr"]["degraded_reason"])
+
+    def test_inspect_evidence_caches_by_source_ocr_skill_and_font_fingerprint(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            page = Path(temporary)
+            Image.new("RGB", (320, 180), "white").save(page / "source.png")
+            first = run_cli("inspect", "evidence", page, "--no-detail-ocr", env={
+                **os.environ,
+                "EDITPPT_DISABLE_PADDLE_OCR": "1",
+                "EDITPPT_FONT_CACHE": str(page / "font-cache.json"),
+            })
+            self.assertEqual(0, first.returncode, first.stderr)
+            first_payload = json.loads(first.stdout)
+            self.assertFalse(first_payload["cache_hit"])
+            self.assertEqual("not_configured", first_payload["text"]["ocr"]["status"])
+            self.assertTrue((page / ".editppt/evidence.json").is_file())
+            self.assertTrue((page / ".editppt/typography-hints.json").is_file())
+
+            second = run_cli("inspect", "evidence", page, "--no-detail-ocr", env={
+                **os.environ,
+                "EDITPPT_DISABLE_PADDLE_OCR": "1",
+                "EDITPPT_FONT_CACHE": str(page / "font-cache.json"),
+            })
+            self.assertEqual(0, second.returncode, second.stderr)
+            self.assertTrue(json.loads(second.stdout)["cache_hit"])
 
     def test_trace_records_actual_command_exit_and_duration(self):
         with tempfile.TemporaryDirectory() as temporary:

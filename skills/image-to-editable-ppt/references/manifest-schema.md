@@ -9,6 +9,10 @@ primarily text, shapes, tables, connectors, and compact images.
 {
   "slide": {"width": 13.333, "height": 7.5, "background": "#FFFFFF"},
   "source": {"width_px": 1600, "height_px": 900},
+  "typography": {
+    "font_family": "Microsoft YaHei",
+    "roles": {"slide_title": {"font_size_px": 50}}
+  },
   "shapes": [],
   "images": [],
   "tables": [],
@@ -21,7 +25,12 @@ Objects may use inches (`left`, `top`, `width`, `height`) or source pixels
 Polygons use `polygon_px: [[x1, y1], [x2, y2], [x3, y3], ...]`; nested
 `points_px` is accepted as the same polygon spelling, but the explicit field is
 preferred.
-`z_index` controls the shared object stack. Shape effects default to none.
+Use named `layer` values for normal stacking: `background` (0), `container`
+(100), `decoration_behind` (120), `band` (140), `content` (200),
+`decoration_front` (240), `text` (300), and `overlay` (400). Legacy `z_index`
+remains supported. If both are present, `z_index` wins and the Builder writes a
+conflict warning to `.editppt/layer-report.json`. Same-z overlapping objects
+without named layers are also reported. Shape effects default to none.
 For task directories prepared by the Skill, `source.width_px/height_px` must
 equal `editppt inspect layout`'s `size_px`; never substitute the original
 pre-normalization dimensions or the chat preview dimensions.
@@ -31,13 +40,22 @@ when reading type size from the source image and is converted to points by the
 Builder. Do not provide both fields. `valign` accepts `top`, `middle`/`mid`, or
 `bottom`.
 
+Every text object should set `text_role` to one of `slide_title`, `lead`,
+`section_title`, `subheading`, `body`, `metric`, `caption`, or `footer`.
+Measured object sizes win; then explicit object size; then the role profile;
+only then the resolution-scaled fallback. At a 900px page height the fallback
+ranges are respectively 42–58, 22–32, 26–38, 20–28, 17–25, 28–48, 13–19,
+and 9–15 source pixels. Other heights scale proportionally.
+
 ## Rich text in one box
 
 ```json
 {
   "box_px": [80, 50, 1300, 70],
   "font_size_px": 42,
-  "font": "PingFang SC",
+  "font": "Microsoft YaHei",
+  "text_role": "slide_title",
+  "layer": "text",
   "wrap": "none",
   "runs": [
     {"text": "3个月看：", "bold": true, "color": "#0085D0"},
@@ -91,11 +109,14 @@ dozens of unrelated rectangles and text boxes.
 
 After `editppt build`, inspect with `editppt render` and `editppt inspect pptx`.
 The manifest draft is not final visual evidence.
-The build JSON also reports font shrink adjustments. Any ratio below 0.75
-usually means the coordinate frame, box geometry, or line grouping is wrong;
-repair that input rather than accepting tiny text.
+The build JSON reports font resolution, role sizes, shrink adjustments, role
+deviations, and layer conflicts. Core text roles shrinking below 90% and body
+text below 85% mean the font file, box geometry, or line grouping needs repair;
+do not accept automatic tiny text.
 
 For page-specific Python authoring, use `editppt.authoring.SlideManifest` and
 the reusable patterns in [authoring-components.md](authoring-components.md).
-The Builder resolves requested fonts to installed families before fitting,
-which prevents PowerPoint-only substitution from changing line breaks.
+The Builder searches explicit roots, user/system fonts, and Microsoft
+PowerPoint's private `DFonts`, reads internal family names and glyph coverage,
+and measures with the resolved file before fitting. Substitutions and the font
+environment fingerprint are always recorded.

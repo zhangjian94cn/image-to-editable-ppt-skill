@@ -40,6 +40,9 @@ class SlideManifest:
     slide_width: float = 13.333333
     slide_height: float = 7.5
     background: str = "#FFFFFF"
+    typography: dict[str, Any] = field(
+        default_factory=lambda: {"font_family": "Microsoft YaHei", "roles": {}}
+    )
     shapes: list[dict[str, Any]] = field(default_factory=list)
     images: list[dict[str, Any]] = field(default_factory=list)
     tables: list[dict[str, Any]] = field(default_factory=list)
@@ -63,7 +66,8 @@ class SlideManifest:
         stroke_width: float = 1,
         radius_px: float | None = None,
         preset: str = "",
-        z_index: float = 100,
+        layer: str = "container",
+        z_index: float | None = None,
         **extra: Any,
     ) -> dict[str, Any]:
         if isinstance(box_or_kind, str):
@@ -89,8 +93,10 @@ class SlideManifest:
                     "fill": "none",
                     "stroke": stroke,
                     "stroke_width": float(stroke_width),
-                    "z_index": float(z_index),
                 }
+                item["layer"] = layer
+                if z_index is not None:
+                    item["z_index"] = float(z_index)
                 item.update(extra)
                 self.shapes.append(item)
                 return item
@@ -98,6 +104,7 @@ class SlideManifest:
                 values,
                 stroke=stroke,
                 stroke_width=stroke_width,
+                layer=layer,
                 z_index=z_index,
                 **extra,
             )
@@ -109,8 +116,10 @@ class SlideManifest:
             "fill": fill,
             "stroke": stroke,
             "stroke_width": float(stroke_width),
-            "z_index": float(z_index),
+            "layer": layer,
         }
+        if z_index is not None:
+            item["z_index"] = float(z_index)
         if radius_px is not None:
             item["source_corner_radius_px"] = float(radius_px)
         if preset:
@@ -132,7 +141,8 @@ class SlideManifest:
         start_arrow: str = "none",
         end_arrow: str = "triangle",
         preset: str = "line",
-        z_index: float = 140,
+        layer: str = "content",
+        z_index: float | None = None,
     ) -> dict[str, Any]:
         if stroke is not None:
             color = stroke
@@ -148,8 +158,10 @@ class SlideManifest:
             "start_arrow": start_arrow,
             "end_arrow": end_arrow,
             "preset": preset,
-            "z_index": float(z_index),
+            "layer": layer,
         }
+        if z_index is not None:
+            item["z_index"] = float(z_index)
         if dash:
             item["dash"] = dash
         self.shapes.append(item)
@@ -162,7 +174,8 @@ class SlideManifest:
         fill: str = "none",
         stroke: str = "none",
         stroke_width: float = 1,
-        z_index: float = 100,
+        layer: str = "container",
+        z_index: float | None = None,
         **extra: Any,
     ) -> dict[str, Any]:
         points = [_point(value) for value in points_px]
@@ -177,8 +190,10 @@ class SlideManifest:
             "fill": fill,
             "stroke": stroke,
             "stroke_width": float(stroke_width),
-            "z_index": float(z_index),
+            "layer": layer,
         }
+        if z_index is not None:
+            item["z_index"] = float(z_index)
         item.update(extra)
         self.shapes.append(item)
         return item
@@ -192,7 +207,8 @@ class SlideManifest:
         dash: str = "",
         start_arrow: str = "none",
         end_arrow: str = "none",
-        z_index: float = 140,
+        layer: str = "content",
+        z_index: float | None = None,
         **extra: Any,
     ) -> dict[str, Any]:
         """Add an open editable source-space path with two or more vertices."""
@@ -211,8 +227,10 @@ class SlideManifest:
             "stroke_width": float(stroke_width),
             "start_arrow": start_arrow,
             "end_arrow": end_arrow,
-            "z_index": float(z_index),
+            "layer": layer,
         }
+        if z_index is not None:
+            item["z_index"] = float(z_index)
         if dash:
             item["dash"] = dash
         item.update(extra)
@@ -226,7 +244,7 @@ class SlideManifest:
         *,
         runs: Iterable[dict[str, Any]] | None = None,
         paragraphs: Iterable[dict[str, Any] | str] | None = None,
-        font: str = "PingFang SC",
+        font: str | None = None,
         font_size: float | None = None,
         font_size_px: float | None = None,
         color: str = "#111111",
@@ -235,7 +253,9 @@ class SlideManifest:
         valign: str = "top",
         wrap: str = "none",
         fit_text: bool = True,
-        z_index: float = 300,
+        text_role: str = "body",
+        layer: str = "text",
+        z_index: float | None = None,
         **extra: Any,
     ) -> dict[str, Any]:
         supplied = int(text is not None) + int(runs is not None) + int(paragraphs is not None)
@@ -245,20 +265,23 @@ class SlideManifest:
             raise ValueError("provide font_size in points or font_size_px, not both")
         if font_size_px is not None:
             font_size = float(font_size_px) * self.slide_height * 72.0 / self.height_px
-        if font_size is None:
-            font_size = 18.0
         item: dict[str, Any] = {
             "box_px": _box(box_px),
-            "font": font,
-            "font_size": float(font_size),
             "color": color,
             "bold": bool(bold),
             "align": align,
             "valign": valign,
             "wrap": wrap,
             "fit_text": bool(fit_text),
-            "z_index": float(z_index),
+            "text_role": text_role,
+            "layer": layer,
         }
+        if font:
+            item["font"] = font
+        if font_size is not None:
+            item["font_size"] = float(font_size)
+        if z_index is not None:
+            item["z_index"] = float(z_index)
         if runs is not None:
             item["runs"] = [dict(run) for run in runs]
         elif paragraphs is not None:
@@ -275,7 +298,8 @@ class SlideManifest:
         path: str | Path,
         *,
         alt: str,
-        z_index: float = 200,
+        layer: str = "content",
+        z_index: float | None = None,
     ) -> dict[str, Any]:
         if not alt.strip():
             raise ValueError("image alt text is required")
@@ -283,8 +307,10 @@ class SlideManifest:
             "path": str(path),
             "box_px": _box(box_px),
             "alt": alt.strip(),
-            "z_index": float(z_index),
+            "layer": layer,
         }
+        if z_index is not None:
+            item["z_index"] = float(z_index)
         self.images.append(item)
         return item
 
@@ -295,7 +321,7 @@ class SlideManifest:
         *,
         column_widths: Sequence[float] | None = None,
         row_heights: Sequence[float] | None = None,
-        font: str = "PingFang SC",
+        font: str = "Microsoft YaHei",
         font_size: float | None = None,
         font_size_px: float | None = None,
         header_fill: str = "#0A65B7",
@@ -303,7 +329,9 @@ class SlideManifest:
         fill: str = "#FFFFFF",
         color: str = "#111111",
         border: str = "#B7C4D4",
-        z_index: float = 250,
+        text_role: str = "body",
+        layer: str = "content",
+        z_index: float | None = None,
         **extra: Any,
     ) -> dict[str, Any]:
         if not rows or not max((len(row) for row in rows), default=0):
@@ -324,8 +352,11 @@ class SlideManifest:
             "fill": fill,
             "color": color,
             "border": border,
-            "z_index": float(z_index),
+            "text_role": text_role,
+            "layer": layer,
         }
+        if z_index is not None:
+            item["z_index"] = float(z_index)
         if column_widths is not None:
             item["column_widths"] = [float(value) for value in column_widths]
         if row_heights is not None:
@@ -345,8 +376,74 @@ class SlideManifest:
         radius_px: float = 0,
     ) -> None:
         box = _box(box_px)
-        self.add_shape(box, kind="roundRect" if radius_px else "rect", fill=fill, radius_px=radius_px)
-        self.add_text(box, label, font_size=font_size, color=color, bold=True, align="center", valign="middle")
+        self.add_shape(box, kind="roundRect" if radius_px else "rect", fill=fill, radius_px=radius_px, layer="band")
+        self.add_text(
+            box,
+            label,
+            font_size=font_size,
+            text_role="section_title",
+            color=color,
+            bold=True,
+            align="center",
+            valign="middle",
+        )
+
+    def add_layered_header(
+        self,
+        container_box_px: Box,
+        band_box_px: Box,
+        accent_box_px: Box,
+        title: str,
+        *,
+        title_box_px: Box | None = None,
+        container_fill: str = "#F5FAFD",
+        container_stroke: str = "#D5E3F1",
+        band_fill: str = "#B8E0F2",
+        accent_fill: str = "#0795D2",
+        title_color: str = "#0087CF",
+        title_font_size_px: float | None = None,
+        radius_px: float = 16,
+    ) -> dict[str, dict[str, Any]]:
+        """Add a card header whose accent is intentionally masked by the band."""
+
+        container = self.add_shape(
+            container_box_px,
+            kind="roundRect",
+            fill=container_fill,
+            stroke=container_stroke,
+            radius_px=radius_px,
+            layer="container",
+        )
+        accent = self.add_shape(
+            accent_box_px,
+            kind="roundRect",
+            fill=accent_fill,
+            stroke="none",
+            radius_px=radius_px / 2,
+            layer="decoration_behind",
+        )
+        band = self.add_shape(
+            band_box_px,
+            kind="roundRect",
+            fill=band_fill,
+            stroke="none",
+            radius_px=radius_px,
+            layer="band",
+        )
+        text_box = title_box_px or band_box_px
+        title_item = self.add_text(
+            text_box,
+            title,
+            font_size_px=title_font_size_px,
+            text_role="section_title",
+            color=title_color,
+            bold=True,
+            align="center",
+            valign="middle",
+            wrap="none",
+            layer="text",
+        )
+        return {"container": container, "accent": accent, "band": band, "title": title_item}
 
     def add_card(
         self,
@@ -395,6 +492,7 @@ class SlideManifest:
         return {
             "slide": {"width": self.slide_width, "height": self.slide_height, "background": self.background},
             "source": {"width_px": self.width_px, "height_px": self.height_px},
+            "typography": self.typography,
             "shapes": self.shapes,
             "images": self.images,
             "tables": self.tables,

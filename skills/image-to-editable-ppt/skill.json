@@ -1,6 +1,6 @@
 {
   "name": "image-to-editable-ppt",
-  "contract_version": "benchmark-driven-page-v3",
+  "contract_version": "typography-layer-evidence-v4",
   "upstream_base": "fb869763127fd31ba7288d905671ffc4ea542f60",
   "required_outputs": ["page.pptx", "result.json"],
   "optional_outputs": ["manifest.json"]

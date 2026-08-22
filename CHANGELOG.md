@@ -6,7 +6,11 @@ Release notes are generated from this file. Keep changelog entries in English.
 
 ### Improvements
 
-- Add a snapshot-v2 benchmark runner with 4/6/10/17-page suites, per-page evidence reports, command telemetry, and PowerPoint-authoritative candidate renders.
+- Add one cached `editppt inspect evidence` entrypoint combining multimodal detail views, visibly degraded Paddle/local text evidence, layout/structure hints, typography size groups, and the font-environment fingerprint.
+- Add semantic typography roles, resolution-scaled defaults, role-specific automatic-shrink warnings, named object layers, deterministic layer diagnostics, and the reusable `add_layered_header` component.
+- Discover and fingerprint fonts by their internal metadata across explicit, user, system, and Microsoft PowerPoint `DFonts` locations; preserve Microsoft YaHei when PowerPoint ships it and record every real fallback.
+- Cache authoritative PowerPoint renders by PPTX SHA/version/DPI and emit clustered local source/candidate comparison crops for targeted Codex repair.
+- Add a snapshot-v2 benchmark runner with frozen baseline, targeted 3-page, core 10-page, and full 17-page suites, per-page evidence reports, command telemetry, and PowerPoint-authoritative candidate renders.
 - Define reconstruction fidelity, single-line title, rich-text run, native table, source-bound asset, and fail-closed PowerPoint render rules in one canonical page prompt and Skill entry.
 - Replace the legacy controller scripts with deterministic `inspect`, `assets`, `build`, `text-fit`, `render`, `compare`, `assemble`, `formula`, and `doctor` tools.
 - Add native DrawingML table authoring, source-pixel crop/background separation, source-space layout/structure hints, PPTX object readback, and PowerPoint-bound visual comparison evidence.
