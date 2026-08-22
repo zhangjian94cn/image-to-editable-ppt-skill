@@ -28,6 +28,11 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 
 ROOT_FILES = {"source.png", "candidate.pptx", "candidate.png", "report.md", "artifacts"}
+DIRECT_POWERPOINT_PATTERN = re.compile(
+    r"(?:osascript|cua-driver|pgrep|pkill|killall|\bopen\b).{0,240}(?:powerpoint|microsoft powerpoint)|"
+    r"(?:powerpoint|microsoft powerpoint).{0,240}(?:osascript|cua-driver|pgrep|pkill|killall|\bopen\b)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class BenchmarkError(RuntimeError):
@@ -472,7 +477,11 @@ def _skill_trace(*paths: Path) -> list[CommandEvidence]:
     return evidence
 
 
-def _issues(metrics: dict[str, Any], render_error: str = "") -> tuple[str, list[dict[str, str]]]:
+def _issues(
+    metrics: dict[str, Any],
+    render_error: str = "",
+    commands: Iterable[CommandEvidence] = (),
+) -> tuple[str, list[dict[str, str]]]:
     issues: list[dict[str, str]] = []
     if render_error:
         issues.append({"severity": "P0", "category": "execution", "message": render_error})
@@ -482,6 +491,13 @@ def _issues(metrics: dict[str, Any], render_error: str = "") -> tuple[str, list[
             "severity": "P0",
             "category": "execution",
             "message": "Codex 未留下与最终 page.pptx SHA 绑定的 editppt render 证据",
+        })
+    forbidden = [value.command for value in commands if DIRECT_POWERPOINT_PATTERN.search(value.command)]
+    if forbidden:
+        issues.append({
+            "severity": "P0",
+            "category": "execution",
+            "message": "页面 Codex 绕过 editppt render 直接控制或检查了 PowerPoint",
         })
     coverage = metrics.get("text_coverage")
     if isinstance(coverage, (int, float)) and coverage < 0.7:
@@ -644,7 +660,9 @@ def _run_page(
         if rendered:
             metrics.update(_visual_metrics(page_dir / "source.png", page_dir / "candidate.png", compare_dir))
         outcome.metrics.update(metrics)
-        outcome.verdict, outcome.issues = _issues(outcome.metrics, render_error)
+        outcome.verdict, outcome.issues = _issues(
+            outcome.metrics, render_error, outcome.commands
+        )
         if render_error:
             outcome.error = render_error
     except Exception as exc:  # noqa: BLE001 - evidence records all page failures

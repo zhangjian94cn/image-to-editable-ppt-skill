@@ -32,6 +32,19 @@ def test_presentation_snapshot_parses_exact_names_and_paths(monkeypatch):
     ]
 
 
+def test_presentation_snapshot_handles_zero_open_presentations(monkeypatch):
+    scripts: list[str] = []
+
+    def run(script: str, timeout: int) -> str:
+        scripts.append(script)
+        return ""
+
+    monkeypatch.setattr(renderer, "_run_osascript", run)
+    assert renderer.presentation_snapshot() == []
+    assert "count of presentations" in scripts[0]
+    assert "repeat with deck in presentations" not in scripts[0]
+
+
 def test_target_only_render_writes_authoritative_png_without_canary(tmp_path, monkeypatch):
     app = tmp_path / "Microsoft PowerPoint.app"
     app.mkdir()

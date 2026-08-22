@@ -14,6 +14,10 @@ Use native text, rich-text runs, shapes, tables, connectors, and ordinary chart
 objects wherever practical. Compact independent image objects are allowed for
 logos, photos, screenshots, maps, and genuinely complex illustrations. Never
 use all or nearly all of `source.png` as a background or covering image.
+Any source-pixel crop must be tight around one allowed asset and must not carry
+text, timeline segments, container borders, or other editable structure that
+you also rebuild. Check the true render for duplicated content around every
+crop.
 
 Prefer existing Skill tools. If a page-specific authoring script is useful, it
 must use `editppt.authoring.SlideManifest` plus the shared Builder and must not
@@ -27,6 +31,14 @@ resulting `preview.png`. Repair visible content omissions, overlaps, overflow,
 unexpected wrapping, and obvious geometry differences, then render again as
 needed. Do not declare success from a manifest preview, object count, or ZIP
 check. If Microsoft PowerPoint cannot render the file, do not report ready.
+
+Treat the Skill checkout as read-only. Do not inspect, patch, or replace its
+runtime implementation from a page task. `editppt render` exclusively owns the
+Microsoft PowerPoint process lifecycle: never call `open`, `osascript`,
+`cua-driver`, `pgrep`, `kill`, or application activation/quit commands to
+control or diagnose PowerPoint. If the curated renderer fails, preserve its
+evidence, explain the failure in your final message, and do not write a ready
+result.
 
 When finished, write:
 

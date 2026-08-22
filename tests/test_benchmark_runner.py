@@ -9,6 +9,7 @@ from pptx import Presentation
 from pptx.util import Inches
 
 from benchmark_runner.runner import (
+    CommandEvidence,
     ROOT_FILES,
     _codex_command,
     _issues,
@@ -53,6 +54,23 @@ def test_pptx_readback_flags_full_page_picture_and_text(tmp_path: Path):
     verdict, issues = _issues({**metrics, "coarse_rgb_loss": 0.0, "content_ink_loss": 0.0})
     assert verdict == "reject"
     assert any(value["category"] == "editability" for value in issues)
+
+
+def test_direct_powerpoint_automation_is_rejected():
+    metrics = {
+        "codex_powerpoint_rendered": True,
+        "text_coverage": 1.0,
+        "max_picture_coverage": 0.1,
+        "out_of_bounds_count": 0,
+        "coarse_rgb_loss": 0.0,
+        "content_ink_loss": 0.0,
+    }
+    verdict, issues = _issues(
+        metrics,
+        commands=[CommandEvidence("osascript -e 'tell application Microsoft PowerPoint to activate'", 0)],
+    )
+    assert verdict == "reject"
+    assert any(value["category"] == "execution" for value in issues)
 
 
 def test_snapshot_root_contract_is_review_first():

@@ -77,18 +77,22 @@ def _run_osascript(script: str, *, timeout: int) -> str:
 
 def presentation_snapshot() -> list[dict[str, str]]:
     script = r'''
+set snapshotRows to {}
 tell application "Microsoft PowerPoint"
-  set rows to {}
-  repeat with deck in presentations
-    try
-      set end of rows to ((name of deck as text) & tab & (full name of deck as text))
-    on error
-      set end of rows to ((name of deck as text) & tab)
-    end try
-  end repeat
+  set deckCount to count of presentations
+  if deckCount > 0 then
+    repeat with deckIndex from 1 to deckCount
+      set deck to presentation deckIndex
+      try
+        set end of my snapshotRows to ((name of deck as text) & tab & (full name of deck as text))
+      on error
+        set end of my snapshotRows to ((name of deck as text) & tab)
+      end try
+    end repeat
+  end if
 end tell
 set AppleScript's text item delimiters to linefeed
-return rows as text
+return snapshotRows as text
 '''.strip()
     raw = _run_osascript(script, timeout=10)
     rows: list[dict[str, str]] = []
