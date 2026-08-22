@@ -12,9 +12,15 @@ from xml.etree import ElementTree as ET
 
 from PIL import Image
 
+from editppt.source_space import prepare_authoring_source
+
 
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 PPT_EXTS = {".ppt", ".pptx"}
+WIDE_SLIDE = {"width": 13.333, "height": 7.5, "size_mode": "wide"}
+PX_PER_INCH = 96
+ASPECT_16_9 = 16 / 9
+ASPECT_TOLERANCE = 0.03
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 NS = {
     "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
@@ -22,6 +28,37 @@ NS = {
     "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
     "rel": REL_NS,
 }
+
+
+def slide_for_source(width_px, height_px):
+    if not width_px or not height_px:
+        raise ValueError("source dimensions must be positive")
+    if abs((width_px / height_px) / ASPECT_16_9 - 1) <= ASPECT_TOLERANCE:
+        return dict(WIDE_SLIDE)
+    return {
+        "width": width_px / PX_PER_INCH,
+        "height": height_px / PX_PER_INCH,
+        "size_mode": "source",
+        "px_per_inch": PX_PER_INCH,
+    }
+
+
+def fit_content_box(width_px, height_px, slide):
+    slide_width = float(slide["width"])
+    slide_height = float(slide["height"])
+    source_aspect = width_px / height_px
+    slide_aspect = slide_width / slide_height
+    if source_aspect >= slide_aspect:
+        width = slide_width
+        height = width / source_aspect
+        left = 0
+        top = (slide_height - height) / 2
+    else:
+        height = slide_height
+        width = height * source_aspect
+        left = (slide_width - width) / 2
+        top = 0
+    return {"left": left, "top": top, "width": width, "height": height, "fit": "contain"}
 
 
 def sha256_text(value):
@@ -50,25 +87,23 @@ def copy_input(src, input_dir):
 
 
 def save_image_page(src, page_dir):
-    page_dir.mkdir(parents=True, exist_ok=True)
-    out = page_dir / "source.png"
-    with Image.open(src) as image:
-        image.convert("RGB").save(out)
-    return out
+    prepare_authoring_source(src, page_dir)
+    return page_dir / "source.png"
 
 
 def render_pdf_pages(pdf_path, pages_dir, dpi):
-    import fitz
+    import pymupdf
 
-    doc = fitz.open(pdf_path)
+    doc = pymupdf.open(pdf_path)
     outputs = []
-    matrix = fitz.Matrix(dpi / 72, dpi / 72)
+    matrix = pymupdf.Matrix(dpi / 72, dpi / 72)
     for index, page in enumerate(doc, start=1):
         page_dir = pages_dir / f"page_{index:03d}"
         page_dir.mkdir(parents=True, exist_ok=True)
         pix = page.get_pixmap(matrix=matrix, alpha=False)
         out = page_dir / "source.png"
         pix.save(out)
+        prepare_authoring_source(out, page_dir)
         outputs.append(out)
     return outputs
 
@@ -210,6 +245,7 @@ def extract_image_based_pptx_pages(pptx_path, pages_dir):
             out = page_dir / "source.png"
             with Image.open(io.BytesIO(z.read(image_part))) as image:
                 image.convert("RGB").save(out)
+            prepare_authoring_source(out, page_dir)
             outputs.append(out)
     return outputs
 
@@ -264,10 +300,10 @@ def page_record(job_dir, page_index, source, input_path, source_page):
         "source_page": source_page,
         "source_image": source.relative_to(job_dir).as_posix(),
         "page_dir": rel_page_dir,
-        "manifest": f"{rel_page_dir}/manifest.json",
-        "validation": f"{rel_page_dir}/validation.json",
+        "page_pptx": f"{rel_page_dir}/page.pptx",
+        "preview": f"{rel_page_dir}/preview.png",
+        "result": f"{rel_page_dir}/result.json",
         "input": Path(input_path).name,
-        "agent_status": "pending",
     }
 
 
@@ -348,7 +384,6 @@ def normalize_inputs(inputs, out_root="output/image-to-editable-ppt", job_dir=No
         "pages": pages,
         "notes_manifest": notes_manifest_path.relative_to(job_dir).as_posix(),
         "output": default_output_name(copied),
-        "validation": "validation.json",
     }
     deck_manifest_path = job_dir / "deck_manifest.json"
     deck_manifest_path.write_text(json.dumps(deck_manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

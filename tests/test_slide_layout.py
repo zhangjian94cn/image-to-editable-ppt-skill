@@ -7,7 +7,9 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CLI_DIR = ROOT / "skills/image-to-editable-ppt/cli"
 RUNTIME_DIR = ROOT / "skills/image-to-editable-ppt/cli/editppt/runtime"
+sys.path.insert(0, str(CLI_DIR))
 sys.path.insert(0, str(RUNTIME_DIR))
 
 from build_pptx_from_manifest import (  # noqa: E402
@@ -19,7 +21,7 @@ from build_pptx_from_manifest import (  # noqa: E402
     slide_size_type,
     text_box_xml,
 )
-from prepare_deck_run import fit_content_box, slide_for_source  # noqa: E402
+from _input_normalization import fit_content_box, slide_for_source  # noqa: E402
 
 
 def scalable_test_font():
@@ -176,6 +178,25 @@ class SlideLayoutTest(unittest.TestCase):
         self.assertNotIn('algn="center"', xml)
         self.assertNotIn('anchor="middle"', xml)
 
+    def test_text_box_supports_native_fill_and_border(self):
+        xml = text_box_xml(
+            2,
+            {
+                "text": "状态",
+                "left": 0,
+                "top": 0,
+                "width": 1,
+                "height": 1,
+                "fill": "#EAF3FF",
+                "stroke": "#0A65B7",
+                "stroke_width": 2,
+            },
+        )
+
+        self.assertIn('<a:solidFill><a:srgbClr val="EAF3FF"/></a:solidFill>', xml)
+        self.assertIn('<a:ln w="25400">', xml)
+        self.assertIn('<a:srgbClr val="0A65B7"/>', xml)
+
     def test_preview_centers_text_inside_its_box(self):
         manifest = {
             "source": {"width_px": 200, "height_px": 200},
@@ -233,6 +254,36 @@ class SlideLayoutTest(unittest.TestCase):
 
         self.assertAlmostEqual(100, ink_center_x, delta=8)
         self.assertAlmostEqual(100, ink_center_y, delta=8)
+
+    def test_preview_supports_newlines_inside_rich_text_runs(self):
+        preview_font = scalable_test_font()
+        self.assertIsNotNone(preview_font)
+        manifest = {
+            "source": {"width_px": 200, "height_px": 200},
+            "slide": {"width": 2, "height": 2, "background": "#ffffff"},
+            "content_box": {"left": 0, "top": 0, "width": 2, "height": 2},
+            "preview_scale": 100,
+            "text_boxes": [
+                {
+                    "runs": [
+                        {"text": "First\n", "color": "#003366"},
+                        {"text": "Second", "bold": True, "color": "#660000"},
+                    ],
+                    "box_px": [20, 20, 160, 160],
+                    "font_size": 24,
+                    "fit_text": False,
+                    "preview_font": preview_font,
+                    "align": "center",
+                    "valign": "middle",
+                }
+            ],
+        }
+
+        ink_center = preview_ink_center(manifest)
+
+        self.assertIsNotNone(ink_center)
+        self.assertAlmostEqual(100, ink_center[0], delta=15)
+        self.assertAlmostEqual(100, ink_center[1], delta=15)
 
     def test_preview_rotates_centered_text_around_the_box_center(self):
         manifest = {

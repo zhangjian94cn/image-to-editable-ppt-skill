@@ -12,6 +12,11 @@ from copy import deepcopy
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from PIL import ImageFont
+
+from font_registry import font_environment_fingerprint, resolve_font
+from typography import LAYER_Z, ROLE_SPECS, boxes_overlap, resolve_layer
+
 
 EMU_PER_INCH = 914400
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -32,6 +37,8 @@ TEXT_VERTICAL_ALIGNMENTS = {
     "top": ("t", "top"),
     "middle": ("ctr", "middle"),
     "center": ("ctr", "middle"),
+    "mid": ("ctr", "middle"),
+    "centre": ("ctr", "middle"),
     "bottom": ("b", "bottom"),
     "t": ("t", "top"),
     "ctr": ("ctr", "middle"),
@@ -148,6 +155,21 @@ def px_to_inches(manifest, x, y, width, height):
 
 def normalize_position_item(manifest, item):
     item = dict(item)
+    raw_points = item.get("points_px")
+    if isinstance(raw_points, list) and all(isinstance(point, (list, tuple)) and len(point) == 2 for point in raw_points):
+        if item.get("type") in {"line", "polyline"}:
+            if len(raw_points) < 2:
+                raise ValueError("a line/polyline requires at least two [x, y] points")
+            if item.get("polyline_px") is not None:
+                raise ValueError("provide polyline_px or nested points_px, not both")
+            item["type"] = "polyline"
+            item["polyline_px"] = raw_points
+            item.pop("points_px", None)
+        elif len(raw_points) >= 3:
+            if item.get("polygon_px") is not None:
+                raise ValueError("provide polygon_px or nested points_px, not both")
+            item["polygon_px"] = raw_points
+            item.pop("points_px", None)
     if "polygon_px" in item:
         points = [(float(point[0]), float(point[1])) for point in item["polygon_px"]]
         if points and "box_px" not in item:
@@ -158,11 +180,29 @@ def normalize_position_item(manifest, item):
             [px_to_inches(manifest, point[0], point[1], 0, 0)["left"], px_to_inches(manifest, point[0], point[1], 0, 0)["top"]]
             for point in points
         ]
+    if "polyline_px" in item:
+        points = [(float(point[0]), float(point[1])) for point in item["polyline_px"]]
+        if len(points) < 2:
+            raise ValueError("polyline_px requires at least two [x, y] points")
+        if "box_px" not in item:
+            xs = [point[0] for point in points]
+            ys = [point[1] for point in points]
+            item["box_px"] = [min(xs), min(ys), max(1.0, max(xs) - min(xs)), max(1.0, max(ys) - min(ys))]
+        item["polyline"] = [
+            [px_to_inches(manifest, point[0], point[1], 0, 0)["left"], px_to_inches(manifest, point[0], point[1], 0, 0)["top"]]
+            for point in points
+        ]
     if "box_px" in item:
         x, y, width, height = item["box_px"]
         item.update(px_to_inches(manifest, x, y, width, height))
     if "points_px" in item:
-        x1, y1, x2, y2 = item["points_px"]
+        values = item["points_px"]
+        if not isinstance(values, list) or len(values) != 4 or any(isinstance(value, (list, tuple, dict)) for value in values):
+            raise ValueError(
+                "points_px must be [x1, y1, x2, y2]; use nested [x, y] points "
+                "with type=polyline for an open path or type=polygon for a closed shape"
+            )
+        x1, y1, x2, y2 = values
         left = min(float(x1), float(x2))
         top = min(float(y1), float(y2))
         width = abs(float(x2) - float(x1))
@@ -178,6 +218,76 @@ def normalize_position_item(manifest, item):
     if item.get("source_corner_radius_px") is not None and "radius" not in item:
         radius = float(item.get("source_corner_radius_px") or 0)
         item["radius"] = px_to_inches(manifest, 0, 0, radius, radius)["width"]
+    return item
+
+
+def normalize_font_size_item(manifest, item):
+    """Resolve optional source-pixel font sizes to PowerPoint points."""
+
+    item = dict(item)
+    source = source_size_px(manifest)
+    if source:
+        _source_width, source_height = source
+        content_box = content_box_for_manifest(manifest)
+
+        def resolve(record):
+            if not isinstance(record, dict) or record.get("font_size_px") is None:
+                return
+            if record.get("font_size") is not None:
+                raise ValueError("provide font_size or font_size_px, not both")
+            record["font_size"] = round(
+                float(record.pop("font_size_px")) * float(content_box["height"]) * 72.0 / source_height,
+                3,
+            )
+
+        resolve(item)
+        for run in item.get("runs", []):
+            resolve(run)
+        for paragraph in item.get("paragraphs", []):
+            if isinstance(paragraph, dict):
+                resolve(paragraph)
+                for run in paragraph.get("runs", []):
+                    resolve(run)
+        for row in item.get("rows", []):
+            for cell in row:
+                if not isinstance(cell, dict):
+                    continue
+                resolve(cell)
+                for run in cell.get("runs", []):
+                    resolve(run)
+    return item
+
+
+def apply_typography_role(manifest, item):
+    """Apply manifest typography defaults without overriding measured evidence."""
+
+    item = dict(item)
+    role = str(item.get("text_role") or "").strip()
+    if not role:
+        return item
+    if role not in ROLE_SPECS:
+        raise ValueError(f"unknown text_role: {role}")
+    typography = manifest.get("typography") if isinstance(manifest.get("typography"), dict) else {}
+    roles = typography.get("roles") if isinstance(typography.get("roles"), dict) else {}
+    configured = roles.get(role) if isinstance(roles.get(role), dict) else {}
+    source = source_size_px(manifest)
+    source_height = float(source[1]) if source else 900.0
+    scale = source_height / 900.0
+    if item.get("font") in (None, "") and typography.get("font_family"):
+        item["font"] = str(typography["font_family"])
+    if item.get("font_size") is None and item.get("font_size_px") is None:
+        if configured.get("font_size") is not None:
+            item["font_size"] = float(configured["font_size"])
+            item["font_size_source"] = "typography_role"
+        else:
+            px = configured.get("font_size_px")
+            if px is None:
+                px = float(ROLE_SPECS[role]["default_px"]) * scale
+                item["font_size_source"] = "role_fallback"
+            else:
+                item["font_size_source"] = "typography_role"
+            item["font_size_px"] = float(px)
+    item["_text_role"] = role
     return item
 
 
@@ -228,11 +338,81 @@ def is_measured_text(item):
     return str(item.get("font_size_source", "")).strip().lower() in {"measured", "hints"}
 
 
+def resolve_text_fonts(item):
+    """Bind text to an installed family before PowerPoint can substitute it."""
+
+    if item.get("preserve_font_name"):
+        return item
+
+    content = "".join(iter_text_lines(item))
+    require_cjk = any("\u4e00" <= char <= "\u9fff" for char in content)
+
+    def resolve(record, inherited=""):
+        requested = str(record.get("font") or inherited or "PingFang SC").strip()
+        face = resolve_font(requested, require_cjk=require_cjk)
+        if face:
+            if face.family.casefold() != requested.casefold():
+                record.setdefault("_requested_font", requested)
+            record["font"] = face.family
+            record["_resolved_font_path"] = face.path
+            record["_resolved_font_index"] = face.face_index
+            record["_resolved_font_sha256"] = face.sha256
+            record["_resolved_font_provider"] = face.provider
+
+    resolve(item)
+    base_font = str(item.get("font") or "PingFang SC")
+    for run in item.get("runs", []):
+        if isinstance(run, dict):
+            resolve(run, base_font)
+    for paragraph in item.get("paragraphs", []):
+        if isinstance(paragraph, dict):
+            for run in paragraph.get("runs", []):
+                if isinstance(run, dict):
+                    resolve(run, base_font)
+    return item
+
+
+def _font_at_em(path, face_index=0):
+    if not path:
+        return None
+    try:
+        return ImageFont.truetype(str(path), size=100, index=int(face_index or 0))
+    except OSError:
+        return None
+
+
+def _actual_text_limits(item, manifest):
+    """Return width/height font-size limits using the resolved local font."""
+
+    font = _font_at_em(item.get("_resolved_font_path"), item.get("_resolved_font_index", 0))
+    if font is None or "width" not in item or "height" not in item:
+        return None
+    lines = iter_text_lines(item)
+    width_pt = max(1.0, float(item["width"]) * 72)
+    height_pt = max(1.0, float(item["height"]) * 72)
+    requested = float(item.get("font_size", 18))
+    widths_per_pt = [float(font.getlength(line)) / 100.0 for line in lines]
+    wrap_enabled = item.get("wrap") not in (None, "", "none")
+    if wrap_enabled:
+        rendered_lines = sum(
+            max(1, math.ceil((units * requested) / width_pt))
+            for units in widths_per_pt
+        )
+        width_limit = requested
+    else:
+        rendered_lines = max(1, len(lines))
+        width_limit = width_pt / max(max(widths_per_pt, default=1.0), 0.01)
+    line_height = float(item.get("line_height", manifest.get("text_line_height", DEFAULT_TEXT_LINE_HEIGHT)))
+    height_limit = height_pt / (rendered_lines * max(line_height, 1.0))
+    return width_limit, height_limit
+
+
 def fitted_font_size(item, manifest):
     if item.get("fit_text") is False or manifest.get("fit_text") is False:
         return None
     if "width" not in item or "height" not in item:
         return None
+    actual_limits = _actual_text_limits(item, manifest)
     lines = iter_text_lines(item)
     requested = float(item.get("font_size", 18))
     width_pt = max(1.0, float(item.get("width", 1)) * 72)
@@ -255,6 +435,9 @@ def fitted_font_size(item, manifest):
         width_limit = width_pt / max(text_width_units(line) for line in lines)
     height_limit = height_pt / (line_count * max(line_height, 1.0))
     max_font_size = min(width_limit, height_limit) * safety
+    if actual_limits is not None:
+        actual_safety = 0.98 if is_measured_text(item) else max(safety, 0.94)
+        max_font_size = min(max_font_size, min(actual_limits) * actual_safety)
     explicit_max = item.get("max_font_size")
     if explicit_max not in (None, ""):
         max_font_size = min(max_font_size, float(explicit_max))
@@ -290,14 +473,88 @@ def fit_text_item(item, manifest):
     return item
 
 
+def text_geometry_diagnostic(item, manifest):
+    """Explain the measured geometry behind an automatic font reduction."""
+
+    requested = item.get("_requested_font_size")
+    if requested is None or "width" not in item or "height" not in item:
+        return {}
+    requested = float(requested)
+    font = _font_at_em(item.get("_resolved_font_path"), item.get("_resolved_font_index", 0))
+    if font is None:
+        return {
+            "limiting_dimension": "unknown",
+            "current_box_px": list(item.get("box_px") or []),
+            "required_content_px": [],
+            "required_content_pt": [],
+            "rendered_line_count": max(1, len(iter_text_lines(item))),
+            "repair_order": ["font_file", "box_geometry", "line_grouping", "font_size"],
+            "warning": "font metrics unavailable; resolve the font before trusting geometry",
+        }
+    lines = iter_text_lines(item)
+    width_pt = max(1.0, float(item["width"]) * 72)
+    height_pt = max(1.0, float(item["height"]) * 72)
+    widths_pt = [float(font.getlength(line)) / 100.0 * requested for line in lines]
+    line_height = float(item.get("line_height", manifest.get("text_line_height", DEFAULT_TEXT_LINE_HEIGHT)))
+    if item.get("wrap") not in (None, "", "none"):
+        rendered_lines = sum(max(1, math.ceil(value / width_pt)) for value in widths_pt)
+        required_width_pt = min(max(widths_pt, default=0.0), width_pt)
+    else:
+        rendered_lines = max(1, len(lines))
+        required_width_pt = max(widths_pt, default=0.0)
+    required_height_pt = rendered_lines * line_height * requested
+    source = source_size_px(manifest)
+    content = content_box_for_manifest(manifest)
+    required_box_px = []
+    if source:
+        source_width, source_height = source
+        required_box_px = [
+            round(required_width_pt / 72.0 * source_width / max(float(content["width"]), 0.01), 1),
+            round(required_height_pt / 72.0 * source_height / max(float(content["height"]), 0.01), 1),
+        ]
+    actual_limits = _actual_text_limits(item, manifest)
+    limiting = "unknown"
+    if actual_limits:
+        width_limit, height_limit = actual_limits
+        limiting = "width" if width_limit <= height_limit else "height"
+    return {
+        "limiting_dimension": limiting,
+        "current_box_px": list(item.get("box_px") or []),
+        "required_content_px": required_box_px,
+        "required_content_pt": [round(required_width_pt, 2), round(required_height_pt, 2)],
+        "rendered_line_count": rendered_lines,
+        "repair_order": ["font_file", "box_geometry", "line_grouping", "font_size"],
+    }
+
+
 def normalize_manifest(manifest):
     """Return a manifest copy with pixel authoring fields resolved to inches."""
     normalized = deepcopy(manifest)
-    normalized["text_boxes"] = [
-        fit_text_item(normalize_position_item(normalized, item), normalized) for item in normalized.get("text_boxes", [])
-    ]
+    text_boxes = list(normalized.get("text_boxes", []))
+    normalized["text_boxes"] = []
+    for item in text_boxes:
+        role_item = apply_typography_role(normalized, item)
+        prepared = resolve_text_fonts(normalize_position_item(normalized, normalize_font_size_item(normalized, role_item)))
+        normalized["text_boxes"].append(fit_text_item(prepared, normalized))
     for key in ("images", "shapes"):
         normalized[key] = [normalize_position_item(normalized, item) for item in normalized.get(key, [])]
+    tables = list(normalized.get("tables", []))
+    normalized["tables"] = []
+    for item in tables:
+        role_item = apply_typography_role(normalized, item)
+        prepared = resolve_text_fonts(normalize_position_item(normalized, normalize_font_size_item(normalized, role_item)))
+        for row in prepared.get("rows", []):
+            for cell in row:
+                if isinstance(cell, dict):
+                    resolve_text_fonts(cell)
+        normalized["tables"].append(prepared)
+    defaults = {"shapes": 100.0, "images": 200.0, "tables": 250.0, "text_boxes": 300.0}
+    for key, default_z in defaults.items():
+        for item in normalized.get(key, []):
+            effective, conflict = resolve_layer(item, default_z)
+            item["_effective_z_index"] = effective
+            if conflict:
+                item["_layer_conflict"] = conflict
     return normalized
 
 
@@ -318,14 +575,41 @@ def shape_fill(fill):
     return f'<a:solidFill><a:srgbClr val="{hex_color(fill)}"/></a:solidFill>'
 
 
-def shape_line_xml(stroke, width, dash=None):
+def shape_fill_for_item(item):
+    gradient = item.get("gradient")
+    if not gradient:
+        return shape_fill(item.get("fill"))
+    stops = gradient.get("stops") if isinstance(gradient, dict) else None
+    if not isinstance(stops, list) or len(stops) < 2:
+        raise ValueError("gradient requires at least two color stops")
+    stop_xml = []
+    for stop in stops:
+        position = float(stop.get("position", 0))
+        if 0 <= position <= 1:
+            position *= 100000
+        if not 0 <= position <= 100000:
+            raise ValueError("gradient stop position must be 0..1 or 0..100000")
+        stop_xml.append(
+            f'<a:gs pos="{int(round(position))}"><a:srgbClr val="{hex_color(stop.get("color"))}"/></a:gs>'
+        )
+    angle = int(round(float(gradient.get("angle", 0)) * 60000))
+    return (
+        '<a:gradFill rotWithShape="1"><a:gsLst>'
+        + "".join(stop_xml)
+        + f'</a:gsLst><a:lin ang="{angle}" scaled="1"/></a:gradFill>'
+    )
+
+
+def shape_line_xml(stroke, width, dash=None, *, start_arrow="none", end_arrow="none"):
     if not stroke or stroke == "none":
         return '<a:ln><a:noFill/></a:ln>'
     dash_xml = f'<a:prstDash val="{xml_text(dash)}"/>' if dash else ""
+    head_xml = f'<a:headEnd type="{xml_text(start_arrow)}"/>' if start_arrow and start_arrow != "none" else ""
+    tail_xml = f'<a:tailEnd type="{xml_text(end_arrow)}"/>' if end_arrow and end_arrow != "none" else ""
     return (
         f'<a:ln w="{int(float(width or 1) * 12700)}">'
         f'<a:solidFill><a:srgbClr val="{hex_color(stroke)}"/></a:solidFill>'
-        f"{dash_xml}"
+        f"{dash_xml}{head_xml}{tail_xml}"
         "</a:ln>"
     )
 
@@ -355,6 +639,8 @@ def text_box_xml(idx, item):
     wrap = item.get("wrap", "none")
     autofit = item.get("autofit", "none")
     autofit_xml = "<a:spAutoFit/>" if autofit == "shape" else "<a:noAutofit/>"
+    background_fill = shape_fill_for_item(item)
+    border = shape_line_xml(item.get("stroke", "none"), item.get("stroke_width", 1), item.get("dash"))
     paragraphs = item.get("paragraphs")
     runs = item.get("runs")
 
@@ -394,7 +680,7 @@ def text_box_xml(idx, item):
     return f"""
       <p:sp>
         <p:nvSpPr><p:cNvPr id="{idx}" name="TextBox {idx}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>
-        <p:spPr><a:xfrm{rotation_attr}><a:off x="{left}" y="{top}"/><a:ext cx="{width}" cy="{height}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></p:spPr>
+        <p:spPr><a:xfrm{rotation_attr}><a:off x="{left}" y="{top}"/><a:ext cx="{width}" cy="{height}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom>{background_fill}{border}</p:spPr>
         <p:txBody>
           <a:bodyPr wrap="{xml_text(wrap)}" anchor="{anchor}" lIns="0" tIns="0" rIns="0" bIns="0">{autofit_xml}</a:bodyPr><a:lstStyle/>
           {text_body}
@@ -416,6 +702,88 @@ def image_xml(idx, rel_id, item):
       </p:pic>"""
 
 
+def _table_text_xml(value, table, row_index):
+    cell = value if isinstance(value, dict) else {"text": value}
+    font_size = int(float(cell.get("font_size", table.get("font_size", 12))) * 100)
+    bold = cell.get("bold", table.get("header_bold", row_index == 0))
+    align = text_alignment(cell.get("align", table.get("align", "center")))[0]
+    valign = text_vertical_alignment(cell.get("valign", table.get("valign", "middle")))[0]
+    raw_runs = cell.get("runs")
+    if not raw_runs:
+        raw_runs = [{"text": cell.get("text", "")}]
+    runs = []
+    for run in raw_runs:
+        run = run if isinstance(run, dict) else {"text": run}
+        run_size = int(float(run.get("font_size", cell.get("font_size", table.get("font_size", 12)))) * 100)
+        run_font = xml_text(run.get("font", cell.get("font", table.get("font", "PingFang SC"))))
+        run_color = hex_color(run.get("color", cell.get("color", table.get("header_color" if row_index == 0 else "color", "#111111"))))
+        run_bold = run.get("bold", bold)
+        run_bold_attr = ' b="1"' if run_bold else ""
+        runs.append(
+            f'<a:r><a:rPr lang="zh-CN" sz="{run_size}"{run_bold_attr}>'
+            f'<a:solidFill><a:srgbClr val="{run_color}"/></a:solidFill>'
+            f'<a:latin typeface="{run_font}"/><a:ea typeface="{run_font}"/><a:cs typeface="{run_font}"/>'
+            f'</a:rPr><a:t>{xml_text(run.get("text", ""))}</a:t></a:r>'
+        )
+    return (
+        f'<a:txBody><a:bodyPr wrap="square" anchor="{valign}" lIns="45720" tIns="22860" rIns="45720" bIns="22860"/>'
+        f'<a:lstStyle/><a:p><a:pPr algn="{align}"/>{"".join(runs)}'
+        f'<a:endParaRPr lang="zh-CN" sz="{font_size}"/></a:p></a:txBody>'
+    )
+
+
+def _table_cell_xml(value, table, row_index):
+    cell = value if isinstance(value, dict) else {}
+    fill = cell.get("fill", table.get("header_fill" if row_index == 0 else "fill", "#FFFFFF"))
+    border = cell.get("border", table.get("border", "#B7C4D4"))
+    border_width = int(float(cell.get("border_width", table.get("border_width", 0.75))) * 12700)
+    border_xml = "".join(
+        f'<a:ln{side} w="{border_width}"><a:solidFill><a:srgbClr val="{hex_color(border)}"/></a:solidFill></a:ln{side}>'
+        for side in ("L", "R", "T", "B")
+    ) if border and border != "none" else "".join(f'<a:ln{side}><a:noFill/></a:ln{side}>' for side in ("L", "R", "T", "B"))
+    fill_xml = shape_fill(fill)
+    return f'<a:tc>{_table_text_xml(value, table, row_index)}<a:tcPr>{border_xml}{fill_xml}</a:tcPr></a:tc>'
+
+
+def table_xml(idx, item):
+    rows = item.get("rows") or []
+    if not rows or not isinstance(rows, list):
+        raise ValueError("table rows must be a non-empty list")
+    column_count = max(len(row) for row in rows)
+    if column_count <= 0:
+        raise ValueError("table requires at least one column")
+    left = emu(item.get("left", 0))
+    top = emu(item.get("top", 0))
+    width = emu(item.get("width", 1))
+    height = emu(item.get("height", 1))
+    column_weights = [float(value) for value in item.get("column_widths", [1] * column_count)]
+    if len(column_weights) != column_count or sum(column_weights) <= 0:
+        raise ValueError("column_widths must match the table column count")
+    grid = [int(width * value / sum(column_weights)) for value in column_weights]
+    grid[-1] += width - sum(grid)
+    row_weights = [float(value) for value in item.get("row_heights", [1] * len(rows))]
+    if len(row_weights) != len(rows) or sum(row_weights) <= 0:
+        raise ValueError("row_heights must match the table row count")
+    row_sizes = [int(height * value / sum(row_weights)) for value in row_weights]
+    row_sizes[-1] += height - sum(row_sizes)
+    grid_xml = "".join(f'<a:gridCol w="{value}"/>' for value in grid)
+    rows_xml = []
+    for row_index, (row, row_height) in enumerate(zip(rows, row_sizes)):
+        values = list(row) + [""] * (column_count - len(row))
+        rows_xml.append(
+            f'<a:tr h="{row_height}">' + "".join(_table_cell_xml(value, item, row_index) for value in values) + '</a:tr>'
+        )
+    name = xml_text(item.get("name", f"Table {idx}"))
+    return f"""
+      <p:graphicFrame>
+        <p:nvGraphicFramePr><p:cNvPr id="{idx}" name="{name}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>
+        <p:xfrm><a:off x="{left}" y="{top}"/><a:ext cx="{width}" cy="{height}"/></p:xfrm>
+        <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">
+          <a:tbl><a:tblPr firstRow="1" bandRow="0"/><a:tblGrid>{grid_xml}</a:tblGrid>{''.join(rows_xml)}</a:tbl>
+        </a:graphicData></a:graphic>
+      </p:graphicFrame>"""
+
+
 def shape_xml(idx, item):
     kind = item.get("type", "rect")
     left = emu(item.get("left", 0))
@@ -425,15 +793,29 @@ def shape_xml(idx, item):
     stroke_width = item.get("stroke_width", 1)
     flip_h = ' flipH="1"' if item.get("flip_h") else ""
     flip_v = ' flipV="1"' if item.get("flip_v") else ""
-    fill = shape_fill(item.get("fill"))
-    line = shape_line_xml(item.get("stroke", "#000000"), stroke_width, item.get("dash"))
+    fill = shape_fill_for_item(item)
+    line = shape_line_xml(
+        item.get("stroke", "#000000"),
+        stroke_width,
+        item.get("dash"),
+        start_arrow=item.get("start_arrow", item.get("begin_arrow", "none")),
+        end_arrow=item.get("end_arrow", "none"),
+    )
     preset = item.get("preset")
     if item.get("polygon_px"):
         geometry = custom_polygon_geometry_xml(item)
+    elif item.get("polyline_px"):
+        geometry = custom_polyline_geometry_xml(item)
     else:
         if not preset:
             preset = "line" if kind == "line" else "ellipse" if kind == "ellipse" else "roundRect" if kind == "roundRect" else "rect"
         geometry = preset_geometry_xml(preset, item)
+    if kind == "line" or str(preset or "").endswith("Connector3"):
+        return f"""
+      <p:cxnSp>
+        <p:nvCxnSpPr><p:cNvPr id="{idx}" name="Connector {idx}"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>
+        <p:spPr><a:xfrm{flip_h}{flip_v}><a:off x="{left}" y="{top}"/><a:ext cx="{width}" cy="{height}"/></a:xfrm>{geometry}{fill}{line}</p:spPr>
+      </p:cxnSp>"""
     return f"""
       <p:sp>
         <p:nvSpPr><p:cNvPr id="{idx}" name="{xml_text(kind.title())} {idx}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
@@ -476,10 +858,42 @@ def custom_polygon_geometry_xml(item):
     )
 
 
+def custom_polyline_geometry_xml(item):
+    points = [(float(point[0]), float(point[1])) for point in item.get("polyline_px", [])]
+    if len(points) < 2:
+        return '<a:prstGeom prst="line"><a:avLst/></a:prstGeom>'
+    left, top, width, height = [float(value) for value in item.get("box_px", [0, 0, 1, 1])]
+    width = max(width, 1.0)
+    height = max(height, 1.0)
+
+    def rel_coord(point):
+        x, y = point
+        return int(round((x - left) / width * 21600)), int(round((y - top) / height * 21600))
+
+    first_x, first_y = rel_coord(points[0])
+    segments = [f'<a:moveTo><a:pt x="{first_x}" y="{first_y}"/></a:moveTo>']
+    for point in points[1:]:
+        x, y = rel_coord(point)
+        segments.append(f'<a:lnTo><a:pt x="{x}" y="{y}"/></a:lnTo>')
+    return (
+        '<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/>'
+        '<a:rect l="l" t="t" r="r" b="b"/>'
+        '<a:pathLst><a:path w="21600" h="21600" fill="none">'
+        + "".join(segments)
+        + "</a:path></a:pathLst></a:custGeom>"
+    )
+
+
 def round_rect_adjustment(item):
     box_px = item.get("box_px")
     if item.get("source_corner_radius_px") is not None and box_px and len(box_px) == 4:
         radius = float(item.get("source_corner_radius_px") or 0)
+        min_dim = max(1.0, min(float(box_px[2]), float(box_px[3])))
+    elif item.get("radius") is not None and box_px and len(box_px) == 4:
+        # A manifest authored in source pixels naturally expresses its corner
+        # radius in the same coordinate space.  Treating this value as inches
+        # turns a small radius into a capsule or arc on large containers.
+        radius = float(item.get("radius") or 0)
         min_dim = max(1.0, min(float(box_px[2]), float(box_px[3])))
     elif item.get("radius") is not None:
         radius = float(item.get("radius") or 0)
@@ -508,17 +922,21 @@ def slide_xml(manifest):
     parts = []
     layered = []
     for index, item in enumerate(manifest.get("shapes", [])):
-        layered.append((float(item.get("z_index", 100)), index, "shape", item, None))
+        layered.append((float(item.get("_effective_z_index", item.get("z_index", 100))), index, "shape", item, None))
     for rel_index, item in enumerate(manifest.get("images", []), start=1):
-        layered.append((float(item.get("z_index", 200)), rel_index, "image", item, f"rId{rel_index + 1}"))
+        layered.append((float(item.get("_effective_z_index", item.get("z_index", 200))), rel_index, "image", item, f"rId{rel_index + 1}"))
+    for index, item in enumerate(manifest.get("tables", [])):
+        layered.append((float(item.get("_effective_z_index", item.get("z_index", 250))), index, "table", item, None))
     for index, item in enumerate(manifest.get("text_boxes", [])):
-        layered.append((float(item.get("z_index", 300)), index, "text", item, None))
+        layered.append((float(item.get("_effective_z_index", item.get("z_index", 300))), index, "text", item, None))
 
     for _z_index, _order, kind, item, rel_id in sorted(layered, key=lambda entry: (entry[0], entry[1])):
         if kind == "shape":
             parts.append(shape_xml(next_id, item))
         elif kind == "image":
             parts.append(image_xml(next_id, rel_id, item))
+        elif kind == "table":
+            parts.append(table_xml(next_id, item))
         else:
             parts.append(text_box_xml(next_id, item))
         next_id += 1
@@ -782,6 +1200,201 @@ def write_pptx(manifest, out_path, manifest_path):
             z.write(src, f"ppt/media/image{media_index}{image_ext(src)}")
             media_index += 1
     normalize_powerpoint_package(out, 1, width, height)
+    return normalized
+
+
+def build_report(normalized, out_path):
+    substitutions = []
+    font_resolution = []
+    text_adjustments = []
+    typography_adjustments = []
+    for index, item in enumerate(normalized.get("text_boxes", []), start=1):
+        font_resolution.append({
+            "text_box": index,
+            "requested": item.get("_requested_font", item.get("font", "")),
+            "resolved": item.get("font", ""),
+            "path": item.get("_resolved_font_path", ""),
+            "face_index": int(item.get("_resolved_font_index") or 0),
+            "sha256": item.get("_resolved_font_sha256", ""),
+            "provider": item.get("_resolved_font_provider", ""),
+        })
+        if item.get("_requested_font"):
+            substitutions.append({
+                "text_box": index,
+                "requested": item["_requested_font"],
+                "resolved": item.get("font", ""),
+            })
+        if item.get("_requested_font_size") is not None:
+            requested = float(item["_requested_font_size"])
+            effective = float(item.get("font_size", requested))
+            text_adjustments.append({
+                "text_box": index,
+                "text_role": item.get("_text_role", item.get("text_role", "")),
+                "text_excerpt": " ".join(iter_text_lines(item))[:100],
+                "requested_pt": requested,
+                "effective_pt": effective,
+                "shrink_ratio": round(effective / max(requested, 0.01), 4),
+                "geometry_diagnostic": text_geometry_diagnostic(item, normalized),
+            })
+        if item.get("_text_role"):
+            typography_adjustments.append({
+                "text_box": index,
+                "text_role": item["_text_role"],
+                "font_size_source": item.get("font_size_source", ""),
+                "effective_pt": float(item.get("font_size", 0)),
+                "requested_pt": float(item.get("_requested_font_size", item.get("font_size", 0))),
+            })
+    severe_adjustments = [value for value in text_adjustments if float(value.get("shrink_ratio", 1)) < 0.75]
+    role_shrink_warnings = []
+    for value in text_adjustments:
+        role = str(value.get("text_role") or "")
+        if role and float(value.get("shrink_ratio", 1)) < float(ROLE_SPECS[role]["shrink_warning"]):
+            role_shrink_warnings.append(value)
+
+    role_size_deviations = []
+    role_range_deviations = []
+    by_role: dict[str, list[tuple[int, dict]]] = {}
+    for index, item in enumerate(normalized.get("text_boxes", []), start=1):
+        role = str(item.get("_text_role") or "")
+        if role:
+            by_role.setdefault(role, []).append((index, item))
+    for role, values in by_role.items():
+        requested_sizes = [
+            float(item.get("_requested_font_size", item.get("font_size", 0))) for _, item in values
+        ]
+        unmeasured_sizes = [
+            float(item.get("_requested_font_size", item.get("font_size", 0)))
+            for _, item in values if not is_measured_text(item)
+        ]
+        baseline_sizes = unmeasured_sizes or requested_sizes
+        median = sorted(baseline_sizes)[len(baseline_sizes) // 2]
+        for index, item in values:
+            requested = float(item.get("_requested_font_size", item.get("font_size", 0)))
+            deviation = abs(requested - median) / max(median, 0.01)
+            if deviation > 0.05:
+                role_size_deviations.append({
+                    "text_box": index,
+                    "text_role": role,
+                    "text_excerpt": " ".join(iter_text_lines(item))[:100],
+                    "requested_pt": requested,
+                    "role_median_requested_pt": median,
+                    "deviation_ratio": round(deviation, 4),
+                    "measured_override": is_measured_text(item),
+                })
+        source = source_size_px(normalized)
+        source_height = float(source[1]) if source else 900.0
+        slide_height = float((normalized.get("slide") or {}).get("height") or 7.5)
+        role_min = float(ROLE_SPECS[role]["min_px"]) * source_height / 900.0
+        role_max = float(ROLE_SPECS[role]["max_px"]) * source_height / 900.0
+        for index, item in values:
+            requested_pt = float(item.get("_requested_font_size", item.get("font_size", 0)))
+            requested_px = requested_pt * source_height / max(slide_height * 72.0, 0.01)
+            if requested_px < role_min or requested_px > role_max:
+                role_range_deviations.append({
+                    "text_box": index,
+                    "text_role": role,
+                    "text_excerpt": " ".join(iter_text_lines(item))[:100],
+                    "requested_pt": round(requested_pt, 3),
+                    "requested_px": round(requested_px, 2),
+                    "role_min_px": round(role_min, 2),
+                    "role_max_px": round(role_max, 2),
+                    "measured_override": is_measured_text(item),
+                })
+
+    layer_objects = []
+    for key, kind in (("shapes", "shape"), ("images", "image"), ("tables", "table"), ("text_boxes", "text")):
+        for index, item in enumerate(normalized.get(key, []), start=1):
+            layer_objects.append({
+                "id": f"{kind}-{index}",
+                "kind": kind,
+                "index": index,
+                "layer": str(item.get("layer") or ""),
+                "z_index": float(item.get("_effective_z_index", item.get("z_index", 0))),
+                "box": {key: float(item[key]) for key in ("left", "top", "width", "height") if key in item},
+                "conflict": item.get("_layer_conflict"),
+            })
+    layer_objects.sort(key=lambda value: (value["z_index"], value["kind"], value["index"]))
+    layer_conflicts = [value for value in layer_objects if value.get("conflict")]
+    unlayered_overlaps = []
+    for first_index, first in enumerate(layer_objects):
+        if first["layer"]:
+            continue
+        for second in layer_objects[first_index + 1:]:
+            if second["layer"] or first["z_index"] != second["z_index"]:
+                continue
+            if boxes_overlap(first["box"], second["box"]):
+                unlayered_overlaps.append({"first": first["id"], "second": second["id"], "z_index": first["z_index"]})
+
+    text_layer_objects = []
+    for index, item in enumerate(normalized.get("text_boxes", []), start=1):
+        compact = re.sub(r"[\s\u3000]+", "", "".join(iter_text_lines(item))).strip()
+        if compact:
+            text_layer_objects.append({
+                "id": f"text-{index}",
+                "text": compact,
+                "excerpt": compact[:80],
+                "box": {key: float(item[key]) for key in ("left", "top", "width", "height") if key in item},
+            })
+    duplicate_text_overlaps = []
+    for first_index, first in enumerate(text_layer_objects):
+        for second in text_layer_objects[first_index + 1:]:
+            shorter, longer = sorted((first["text"], second["text"]), key=len)
+            if len(shorter) < 3 or shorter not in longer:
+                continue
+            if boxes_overlap(first["box"], second["box"]):
+                duplicate_text_overlaps.append({
+                    "first": first["id"],
+                    "second": second["id"],
+                    "duplicated_excerpt": shorter[:80],
+                    "first_excerpt": first["excerpt"],
+                    "second_excerpt": second["excerpt"],
+                })
+
+    warnings = []
+    if severe_adjustments:
+        warnings.append(f"{len(severe_adjustments)} text boxes were shrunk below 75% of requested size")
+    if role_shrink_warnings:
+        warnings.append(f"{len(role_shrink_warnings)} semantic text boxes exceeded their role shrink threshold")
+    unresolved_role_deviations = [value for value in role_size_deviations if not value["measured_override"]]
+    if unresolved_role_deviations:
+        warnings.append(f"{len(unresolved_role_deviations)} text boxes differ from their role median by more than 5% without measured evidence")
+    unresolved_role_ranges = [value for value in role_range_deviations if not value["measured_override"]]
+    if unresolved_role_ranges:
+        warnings.append(f"{len(unresolved_role_ranges)} text boxes fall outside their semantic role size range without measured evidence")
+    if layer_conflicts:
+        warnings.append(f"{len(layer_conflicts)} objects declare both layer and a conflicting z_index; z_index won")
+    if unlayered_overlaps:
+        warnings.append(f"{len(unlayered_overlaps)} same-z overlapping object pairs have no named layer")
+    if duplicate_text_overlaps:
+        warnings.append(f"{len(duplicate_text_overlaps)} overlapping text pairs duplicate the same visible content; use one rich-text box")
+    return {
+        "schema_version": 2,
+        "output_pptx": str(Path(out_path).resolve()),
+        "objects": {
+            "shapes": len(normalized.get("shapes", [])),
+            "images": len(normalized.get("images", [])),
+            "tables": len(normalized.get("tables", [])),
+            "text_boxes": len(normalized.get("text_boxes", [])),
+        },
+        "font_substitutions": substitutions,
+        "font_resolution": font_resolution,
+        "font_environment_fingerprint": font_environment_fingerprint(),
+        "text_adjustments": text_adjustments,
+        "severe_text_adjustments": severe_adjustments,
+        "typography_adjustments": typography_adjustments,
+        "role_shrink_warnings": role_shrink_warnings,
+        "role_size_deviations": role_size_deviations,
+        "role_range_deviations": role_range_deviations,
+        "layer_report": {
+            "schema_version": 1,
+            "named_layer_defaults": LAYER_Z,
+            "objects": layer_objects,
+            "conflicts": layer_conflicts,
+            "unlayered_overlaps": unlayered_overlaps,
+            "duplicate_text_overlaps": duplicate_text_overlaps,
+        },
+        "warnings": warnings,
+    }
 
 
 def deck_slide_size(deck, page_entries):
@@ -882,15 +1495,26 @@ def render_preview(manifest, manifest_path, out_path):
     def open_preview_image(src):
         if src.suffix.lower() != ".svg":
             return Image.open(src).convert("RGBA")
-        convert = "/opt/homebrew/bin/magick"
-        if not Path(convert).exists():
-            convert = "/opt/homebrew/bin/convert"
-        if not Path(convert).exists():
-            print(f"Warning: cannot preview SVG without ImageMagick: {src}", file=sys.stderr)
+        commands = []
+        for command in ("/opt/homebrew/bin/rsvg-convert", "/usr/local/bin/rsvg-convert"):
+            if Path(command).exists():
+                commands.append([command, "-o"])
+        for command in ("/opt/homebrew/bin/magick", "/opt/homebrew/bin/convert"):
+            if Path(command).exists():
+                commands.append([command, str(src)])
+        if not commands:
+            print(f"Warning: cannot draft-preview SVG without rsvg-convert or ImageMagick: {src}", file=sys.stderr)
             return None
         with tempfile.NamedTemporaryFile(suffix=".png") as handle:
-            subprocess.run([convert, str(src), handle.name], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            return Image.open(handle.name).convert("RGBA")
+            errors = []
+            for command in commands:
+                invocation = [*command, handle.name, str(src)] if command[-1] == "-o" else [*command, handle.name]
+                completed = subprocess.run(invocation, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if completed.returncode == 0:
+                    return Image.open(handle.name).convert("RGBA")
+                errors.append(completed.stderr.decode("utf-8", errors="replace")[:200])
+            print(f"Warning: SVG draft preview failed: {'; '.join(errors)}", file=sys.stderr)
+            return None
 
     def render_shape(item):
         box = [item.get("left", 0) * scale, item.get("top", 0) * scale, (item.get("left", 0) + item.get("width", 1)) * scale, (item.get("top", 0) + item.get("height", 1)) * scale]
@@ -900,6 +1524,9 @@ def render_preview(manifest, manifest_path, out_path):
         if item.get("polygon"):
             points = [(point[0] * scale, point[1] * scale) for point in item["polygon"]]
             draw.polygon(points, fill=None if fill in (None, "none") else fill, outline=None if outline == "none" else outline)
+        elif item.get("polyline"):
+            points = [(point[0] * scale, point[1] * scale) for point in item["polyline"]]
+            draw.line(points, fill=outline, width=width)
         elif item.get("type") == "line":
             if "points" in item:
                 points = [value * scale for value in item["points"]]
@@ -961,6 +1588,15 @@ def render_preview(manifest, manifest_path, out_path):
         box_width = max(1, int(item.get("width", 1) * scale))
         box_height = max(1, int(item.get("height", 0.4) * scale))
         rotation = float(item.get("rotation", 0) or 0)
+        background = preview_color(item.get("fill"))
+        border = preview_color(item.get("stroke"))
+        if background not in (None, "none") or border not in (None, "none"):
+            draw.rectangle(
+                [box_x, box_y, box_x + box_width, box_y + box_height],
+                fill=None if background in (None, "none") else background,
+                outline=None if border in (None, "none") else border,
+                width=max(1, int(float(item.get("stroke_width", 1)))),
+            )
 
         def aligned_origin(bounds, origin_x, origin_y):
             text_width = bounds[2] - bounds[0]
@@ -979,8 +1615,9 @@ def render_preview(manifest, manifest_path, out_path):
                 text_y = origin_y
             return text_x, text_y
 
-        run_specs = []
+        run_lines = []
         if item.get("runs"):
+            run_lines = [[]]
             cursor_x = 0
             base_size = size
             for run in item["runs"]:
@@ -993,21 +1630,55 @@ def render_preview(manifest, manifest_path, out_path):
                 run_fill = preview_color(run.get("color", item.get("color", "#111111")))
                 baseline = float(run.get("baseline", 0) or 0)
                 run_y = int(-baseline / 100000 * base_size)
-                run_text = str(run.get("text", ""))
-                run_specs.append((cursor_x, run_y, run_text, run_fill, run_font, run_font.getbbox(run_text)))
-                cursor_x += int(round(draw.textlength(run_text, font=run_font)))
+                fragments = str(run.get("text", "")).split("\n")
+                for fragment_index, fragment in enumerate(fragments):
+                    if fragment:
+                        run_lines[-1].append(
+                            (cursor_x, run_y, fragment, run_fill, run_font, run_font.getbbox(fragment))
+                        )
+                        cursor_x += int(round(draw.textlength(fragment, font=run_font)))
+                    if fragment_index < len(fragments) - 1:
+                        run_lines.append([])
+                        cursor_x = 0
 
         def draw_content(target_draw, origin_x, origin_y):
-            if run_specs:
-                bounds = (
-                    min(spec[0] + spec[5][0] for spec in run_specs),
-                    min(spec[1] + spec[5][1] for spec in run_specs),
-                    max(spec[0] + spec[5][2] for spec in run_specs),
-                    max(spec[1] + spec[5][3] for spec in run_specs),
-                )
-                text_x, text_y = aligned_origin(bounds, origin_x, origin_y)
-                for run_x, run_y, run_text, run_fill, run_font, _run_bounds in run_specs:
-                    target_draw.text((text_x + run_x, text_y + run_y), run_text, fill=run_fill, font=run_font)
+            if run_lines:
+                line_metrics = []
+                for line in run_lines:
+                    if line:
+                        bounds = (
+                            min(spec[0] + spec[5][0] for spec in line),
+                            min(spec[1] + spec[5][1] for spec in line),
+                            max(spec[0] + spec[5][2] for spec in line),
+                            max(spec[1] + spec[5][3] for spec in line),
+                        )
+                    else:
+                        bounds = (0, 0, 0, base_size)
+                    line_metrics.append((line, bounds, max(1, bounds[3] - bounds[1])))
+                spacing = 4
+                block_height = sum(value[2] for value in line_metrics) + spacing * max(0, len(line_metrics) - 1)
+                if valign == "middle":
+                    line_y = origin_y + (box_height - block_height) // 2
+                elif valign == "bottom":
+                    line_y = origin_y + box_height - block_height
+                else:
+                    line_y = origin_y
+                for line, bounds, line_height in line_metrics:
+                    line_width = bounds[2] - bounds[0]
+                    if align == "center":
+                        line_x = origin_x + (box_width - line_width) // 2 - bounds[0]
+                    elif align == "right":
+                        line_x = origin_x + box_width - line_width - bounds[0]
+                    else:
+                        line_x = origin_x - bounds[0]
+                    for run_x, run_y, run_text, run_fill, run_font, _run_bounds in line:
+                        target_draw.text(
+                            (line_x + run_x, line_y + run_y - bounds[1]),
+                            run_text,
+                            fill=run_fill,
+                            font=run_font,
+                        )
+                    line_y += line_height + spacing
                 return
             bounds = target_draw.multiline_textbbox((0, 0), preview_text, font=font, spacing=4, align=align)
             text_x, text_y = aligned_origin(bounds, origin_x, origin_y)
@@ -1023,13 +1694,60 @@ def render_preview(manifest, manifest_path, out_path):
             return
         draw_content(draw, box_x, box_y)
 
+    def render_table(item):
+        rows = item.get("rows") or []
+        if not rows:
+            return
+        columns = max(len(row) for row in rows)
+        left = int(item.get("left", 0) * scale)
+        top = int(item.get("top", 0) * scale)
+        width = max(1, int(item.get("width", 1) * scale))
+        height = max(1, int(item.get("height", 1) * scale))
+        column_weights = item.get("column_widths") or [1] * columns
+        row_weights = item.get("row_heights") or [1] * len(rows)
+        x_values = [left]
+        for value in column_weights:
+            x_values.append(x_values[-1] + int(width * float(value) / sum(column_weights)))
+        x_values[-1] = left + width
+        y_values = [top]
+        for value in row_weights:
+            y_values.append(y_values[-1] + int(height * float(value) / sum(row_weights)))
+        y_values[-1] = top + height
+        for row_index, row in enumerate(rows):
+            for column_index in range(columns):
+                value = row[column_index] if column_index < len(row) else ""
+                cell = value if isinstance(value, dict) else {"text": value}
+                fill = preview_color(cell.get("fill", item.get("header_fill" if row_index == 0 else "fill", "#FFFFFF")))
+                border = preview_color(cell.get("border", item.get("border", "#B7C4D4")))
+                box = [x_values[column_index], y_values[row_index], x_values[column_index + 1], y_values[row_index + 1]]
+                draw.rectangle(box, fill=fill, outline=border)
+                text = str(cell.get("text", ""))
+                size = max(1, int(float(cell.get("font_size", item.get("font_size", 12))) * scale / 72))
+                font_path = choose_preview_font(cell.get("preview_font") or item.get("preview_font"))
+                try:
+                    font = ImageFont.truetype(font_path, size=size) if font_path else ImageFont.load_default()
+                except Exception:
+                    font = ImageFont.load_default()
+                bounds = draw.multiline_textbbox((0, 0), text, font=font, align="center")
+                text_width = bounds[2] - bounds[0]
+                text_height = bounds[3] - bounds[1]
+                draw.multiline_text(
+                    ((box[0] + box[2] - text_width) / 2, (box[1] + box[3] - text_height) / 2),
+                    text,
+                    font=font,
+                    fill=preview_color(cell.get("color", item.get("header_color" if row_index == 0 else "color", "#111111"))),
+                    align="center",
+                )
+
     layered = []
     for index, item in enumerate(manifest.get("shapes", [])):
-        layered.append((float(item.get("z_index", 100)), index, render_shape, item))
+        layered.append((float(item.get("_effective_z_index", item.get("z_index", 100))), index, render_shape, item))
     for index, item in enumerate(manifest.get("images", [])):
-        layered.append((float(item.get("z_index", 200)), index, render_image, item))
+        layered.append((float(item.get("_effective_z_index", item.get("z_index", 200))), index, render_image, item))
+    for index, item in enumerate(manifest.get("tables", [])):
+        layered.append((float(item.get("_effective_z_index", item.get("z_index", 250))), index, render_table, item))
     for index, item in enumerate(manifest.get("text_boxes", [])):
-        layered.append((float(item.get("z_index", 300)), index, render_text, item))
+        layered.append((float(item.get("_effective_z_index", item.get("z_index", 300))), index, render_text, item))
     for _z_index, _order, renderer, item in sorted(layered, key=lambda entry: (entry[0], entry[1])):
         renderer(item)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -1078,6 +1796,7 @@ def main():
     parser.add_argument("--deck-manifest")
     parser.add_argument("--out")
     parser.add_argument("--preview")
+    parser.add_argument("--report")
     args = parser.parse_args()
     if args.deck_manifest:
         deck, entries, notes_entries = page_entries_from_deck_manifest(args.deck_manifest)
@@ -1090,10 +1809,19 @@ def main():
     if not args.out:
         parser.error("--out is required unless --deck-manifest provides an output")
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
-    write_pptx(manifest, args.out, args.manifest)
+    normalized = write_pptx(manifest, args.out, args.manifest)
+    if args.report:
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(
+            json.dumps(build_report(normalized, args.out), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
     if args.preview:
         render_preview(manifest, args.manifest, args.preview)
     print(f"Wrote {args.out}")
+    if args.report:
+        print(f"Wrote {args.report}")
     if args.preview:
         print(f"Wrote {args.preview}")
 

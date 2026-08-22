@@ -1,6 +1,6 @@
 [project]
 name = "image-to-editable-ppt-cli"
-version = "0.4.0"
+version = "0.6.0"
 description = "Deterministic helper CLI for one-Codex-task-per-page editable PPT rebuilding."
 requires-python = ">=3.10"
 dependencies = [
@@ -11,6 +11,7 @@ dependencies = [
   "PyYAML>=6.0.0",
   "numpy>=1.26.0",
   "requests>=2.31.0",
+  "fonttools>=4.56.0",
 ]
 
 [project.scripts]

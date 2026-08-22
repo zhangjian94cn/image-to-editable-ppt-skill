@@ -23,7 +23,7 @@ Required outputs:
 source.png
 page.pptx
 result.json
-preview.png   # optional
+preview.png   # true render of page.pptx from Microsoft PowerPoint
 ```
 
 ```json
@@ -34,11 +34,14 @@ preview.png   # optional
 
 ```bash
 editppt prepare <input...>
-editppt inspect <page-dir>
-editppt extract-assets --input <image> --out-dir <dir>
+editppt inspect text|layout|structure|pptx ...
+editppt assets crop|separate|split-alpha|remove-chroma|brand ...
 editppt build <page-dir>
+editppt text-fit ...
 editppt render <page-dir>
+editppt compare <page-dir>
 editppt assemble <page-dir...> --out <deck.pptx>
+editppt formula render-latex ...
 editppt doctor --json
 ```
 
@@ -53,4 +56,9 @@ editppt doctor --json
 python -m unittest discover -s tests -v
 ```
 
-Never hide missing editable structure behind a whole-slide raster. Local image objects remain appropriate for logos, photos, maps, screenshots, and genuinely complex illustrations.
+The shared Builder resolves installed fonts, authors native connectors and rich
+tables, and can be composed from `editppt.authoring.SlideManifest`. Never hide
+missing editable structure behind a whole-slide raster. Local image objects
+remain appropriate for logos, photos, maps, screenshots, and genuinely complex
+illustrations. `result.json` may be written only after the exact `page.pptx`
+has been opened and rendered by Microsoft PowerPoint.

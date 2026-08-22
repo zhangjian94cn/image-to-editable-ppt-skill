@@ -6,13 +6,36 @@ Release notes are generated from this file. Keep changelog entries in English.
 
 ### Improvements
 
-- Replace the multi-agent run controller with one Codex task per page and a small optional `editppt` helper surface.
-- Keep OCR, source-bound asset extraction, editable OOXML building, preview rendering, deck assembly, and environment diagnosis without controller state or delivery gates.
+- Treat page-local brand asset hints as optional source-match-only candidates, with automatic source extraction and non-blocking warnings when a hint is absent, invalid, unavailable, or visually mismatched.
+- Add one cached `editppt inspect evidence` entrypoint combining multimodal detail views, visibly degraded Paddle/local text evidence, layout/structure hints, typography size groups, and the font-environment fingerprint.
+- Add semantic typography roles, resolution-scaled defaults, role-specific automatic-shrink warnings, named object layers, deterministic layer diagnostics, and the reusable `add_layered_header` component.
+- Discover and fingerprint fonts by their internal metadata across explicit, user, system, and Microsoft PowerPoint `DFonts` locations; preserve Microsoft YaHei when PowerPoint ships it and record every real fallback.
+- Cache authoritative PowerPoint renders by PPTX SHA/version/DPI and emit clustered local source/candidate comparison crops for targeted Codex repair.
+- Diagnose every semantic-role shrink with its text excerpt, limiting dimension, and suggested content box, and distinguish requested role-size inconsistency from downstream automatic fitting.
+- Clarify that transcript lines are not authoring-object boundaries, measured size overrides must be labeled, and `slide_title` is reserved for the primary page title.
+- Add deterministic native-shape bar and line chart components and require final candidates to resolve unexplained role-size deviations and refresh comparisons after any rebuild.
+- Diagnose overlapping text boxes that duplicate the same visible prefix, and accept common shape/chart call aliases so Codex can use shared components without trial-and-error authoring failures.
+- Diagnose unmeasured text sizes outside each semantic role's resolution-scaled source-pixel range, even when every object in that role is consistently wrong.
+- Persist evidence-cache hits in the page index so benchmark telemetry reports actual reuse instead of the original cold-build state.
+- Remove macOS `.DS_Store` metadata from snapshot roots before enforcing the four-file review contract; all other unexpected process files still fail closed.
+- Add a snapshot-v2 benchmark runner with frozen baseline, targeted 3-page, core 10-page, and full 17-page suites, per-page evidence reports, command telemetry, and PowerPoint-authoritative candidate renders.
+- Define reconstruction fidelity, single-line title, rich-text run, native table, source-bound asset, and fail-closed PowerPoint render rules in one canonical page prompt and Skill entry.
+- Replace the legacy controller scripts with deterministic `inspect`, `assets`, `build`, `text-fit`, `render`, `compare`, `assemble`, `formula`, and `doctor` tools.
+- Add native DrawingML table authoring, source-pixel crop/background separation, source-space layout/structure hints, PPTX object readback, and PowerPoint-bound visual comparison evidence.
+- Add reusable source-pixel authoring components for native timelines, connectors, cards, section bands, rich-text tables, and compact assets.
+- Resolve requested fonts to installed families inside the Builder and fit against actual local font metrics before PowerPoint can substitute fonts and change wrapping.
 
 ### Fixes
 
+- Run the complete pytest suite in CI instead of importing pytest-based modules through incomplete unittest discovery.
+- Keep font-fit geometry diagnostics structurally stable when a CI or authoring host has no usable local font metrics, while making the degraded measurement explicit.
+- Make `editppt render` render the exact `page.pptx` through Microsoft PowerPoint instead of refreshing a manifest sketch.
+- Assemble independent `page.pptx` files with relationship-aware Open XML copying in page order, without requiring page manifests.
+- Label Builder previews as drafts and prefer `rsvg-convert` for reliable audited SVG brand-asset previews.
 - Use the requested DPI when normalizing legacy PPT files through a local PDF conversion.
 - Wrap deterministic editable slide XML in a standards-complete presentation package so generated pages and assembled decks open directly in Microsoft PowerPoint.
+- Replace the external synthetic-canary renderer with a Skill-owned target-only PowerPoint renderer that snapshots user presentations, opens and closes only the collision-proof candidate, and records exact readback evidence.
+- Emit native DrawingML connectors and arrowheads instead of approximating connections with ordinary line shapes.
 
 ### Documentation
 
