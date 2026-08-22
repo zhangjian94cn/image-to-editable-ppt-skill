@@ -46,6 +46,11 @@ Measured object sizes win; then explicit object size; then the role profile;
 only then the resolution-scaled fallback. At a 900px page height the fallback
 ranges are respectively 42–58, 22–32, 26–38, 20–28, 17–25, 28–48, 13–19,
 and 9–15 source pixels. Other heights scale proportionally.
+Use `slide_title` only for the primary page title. Mark an explicitly measured
+exception with `font_size_source: "measured"`; otherwise same-role requested
+sizes differing by more than 5% are reported. OCR line boxes are evidence, not
+object boundaries: one paragraph should remain one text object with explicit
+newlines or `paragraphs`.
 
 ## Rich text in one box
 
@@ -112,7 +117,9 @@ The manifest draft is not final visual evidence.
 The build JSON reports font resolution, role sizes, shrink adjustments, role
 deviations, and layer conflicts. Core text roles shrinking below 90% and body
 text below 85% mean the font file, box geometry, or line grouping needs repair;
-do not accept automatic tiny text.
+do not accept automatic tiny text. Each shrink diagnostic includes the text
+excerpt, limiting width/height, and required content dimensions in source
+pixels and points.
 
 For page-specific Python authoring, use `editppt.authoring.SlideManifest` and
 the reusable patterns in [authoring-components.md](authoring-components.md).

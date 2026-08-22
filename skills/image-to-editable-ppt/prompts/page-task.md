@@ -83,6 +83,15 @@ overlapping shape a named `layer`. Use the measured size groups indexed by
 `caption`, and `footer`. For layered card headings prefer
 `SlideManifest.add_layered_header`, which builds
 `container → decoration_behind → band → text`.
+Use `slide_title` only for the primary page title. A same-row topic phrase,
+qualifier, card heading, or column label gets its own semantic role. If a size
+comes from `text_hints.json`, set `font_size_source="measured"`; otherwise a
+same-role size exception is not auditable.
+
+The transcript records visible lines, not final text-object boundaries. Merge
+successive lines belonging to one sentence or paragraph into one editable text
+box, preserving the visible break with `\n` or paragraph records. Do not split
+one paragraph into independent boxes merely to reproduce OCR line boxes.
 
 Use `font_size_px` when estimating a size from the source image; plain
 `font_size` is expressed in PowerPoint points. After each build, inspect the
@@ -91,6 +100,10 @@ reported font resolution, text adjustments, role deviations, and
 text-box dimensions, line grouping, then font size. Core roles shrinking below
 90%, or body text below 85%, require correction. Repair stacking with
 `layer`/`z_index`; do not move correctly measured source geometry to hide it.
+Before writing `result.json`, read `.editppt/build.json` directly. Fix every
+`role_shrink_warning`, using its text excerpt, limiting dimension, and required
+content box suggestion. A successful `editppt build` exit code alone is not
+evidence that typography is complete.
 
 Generate `page.pptx`, run `editppt render` on that exact file, and view the
 resulting `preview.png`. Repair visible content omissions, overlaps, overflow,

@@ -473,6 +473,52 @@ def fit_text_item(item, manifest):
     return item
 
 
+def text_geometry_diagnostic(item, manifest):
+    """Explain the measured geometry behind an automatic font reduction."""
+
+    requested = item.get("_requested_font_size")
+    if requested is None or "width" not in item or "height" not in item:
+        return {}
+    requested = float(requested)
+    font = _font_at_em(item.get("_resolved_font_path"), item.get("_resolved_font_index", 0))
+    if font is None:
+        return {}
+    lines = iter_text_lines(item)
+    width_pt = max(1.0, float(item["width"]) * 72)
+    height_pt = max(1.0, float(item["height"]) * 72)
+    widths_pt = [float(font.getlength(line)) / 100.0 * requested for line in lines]
+    line_height = float(item.get("line_height", manifest.get("text_line_height", DEFAULT_TEXT_LINE_HEIGHT)))
+    if item.get("wrap") not in (None, "", "none"):
+        rendered_lines = sum(max(1, math.ceil(value / width_pt)) for value in widths_pt)
+        required_width_pt = min(max(widths_pt, default=0.0), width_pt)
+    else:
+        rendered_lines = max(1, len(lines))
+        required_width_pt = max(widths_pt, default=0.0)
+    required_height_pt = rendered_lines * line_height * requested
+    source = source_size_px(manifest)
+    content = content_box_for_manifest(manifest)
+    required_box_px = []
+    if source:
+        source_width, source_height = source
+        required_box_px = [
+            round(required_width_pt / 72.0 * source_width / max(float(content["width"]), 0.01), 1),
+            round(required_height_pt / 72.0 * source_height / max(float(content["height"]), 0.01), 1),
+        ]
+    actual_limits = _actual_text_limits(item, manifest)
+    limiting = "unknown"
+    if actual_limits:
+        width_limit, height_limit = actual_limits
+        limiting = "width" if width_limit <= height_limit else "height"
+    return {
+        "limiting_dimension": limiting,
+        "current_box_px": list(item.get("box_px") or []),
+        "required_content_px": required_box_px,
+        "required_content_pt": [round(required_width_pt, 2), round(required_height_pt, 2)],
+        "rendered_line_count": rendered_lines,
+        "repair_order": ["font_file", "box_geometry", "line_grouping", "font_size"],
+    }
+
+
 def normalize_manifest(manifest):
     """Return a manifest copy with pixel authoring fields resolved to inches."""
     normalized = deepcopy(manifest)
@@ -1176,9 +1222,11 @@ def build_report(normalized, out_path):
             text_adjustments.append({
                 "text_box": index,
                 "text_role": item.get("_text_role", item.get("text_role", "")),
+                "text_excerpt": " ".join(iter_text_lines(item))[:100],
                 "requested_pt": requested,
                 "effective_pt": effective,
                 "shrink_ratio": round(effective / max(requested, 0.01), 4),
+                "geometry_diagnostic": text_geometry_diagnostic(item, normalized),
             })
         if item.get("_text_role"):
             typography_adjustments.append({
@@ -1202,16 +1250,25 @@ def build_report(normalized, out_path):
         if role:
             by_role.setdefault(role, []).append((index, item))
     for role, values in by_role.items():
-        median = sorted(float(item.get("font_size", 0)) for _, item in values)[len(values) // 2]
+        requested_sizes = [
+            float(item.get("_requested_font_size", item.get("font_size", 0))) for _, item in values
+        ]
+        unmeasured_sizes = [
+            float(item.get("_requested_font_size", item.get("font_size", 0)))
+            for _, item in values if not is_measured_text(item)
+        ]
+        baseline_sizes = unmeasured_sizes or requested_sizes
+        median = sorted(baseline_sizes)[len(baseline_sizes) // 2]
         for index, item in values:
-            effective = float(item.get("font_size", 0))
-            deviation = abs(effective - median) / max(median, 0.01)
+            requested = float(item.get("_requested_font_size", item.get("font_size", 0)))
+            deviation = abs(requested - median) / max(median, 0.01)
             if deviation > 0.05:
                 role_size_deviations.append({
                     "text_box": index,
                     "text_role": role,
-                    "effective_pt": effective,
-                    "role_median_pt": median,
+                    "text_excerpt": " ".join(iter_text_lines(item))[:100],
+                    "requested_pt": requested,
+                    "role_median_requested_pt": median,
                     "deviation_ratio": round(deviation, 4),
                     "measured_override": is_measured_text(item),
                 })

@@ -10,6 +10,8 @@ Release notes are generated from this file. Keep changelog entries in English.
 - Add semantic typography roles, resolution-scaled defaults, role-specific automatic-shrink warnings, named object layers, deterministic layer diagnostics, and the reusable `add_layered_header` component.
 - Discover and fingerprint fonts by their internal metadata across explicit, user, system, and Microsoft PowerPoint `DFonts` locations; preserve Microsoft YaHei when PowerPoint ships it and record every real fallback.
 - Cache authoritative PowerPoint renders by PPTX SHA/version/DPI and emit clustered local source/candidate comparison crops for targeted Codex repair.
+- Diagnose every semantic-role shrink with its text excerpt, limiting dimension, and suggested content box, and distinguish requested role-size inconsistency from downstream automatic fitting.
+- Clarify that transcript lines are not authoring-object boundaries, measured size overrides must be labeled, and `slide_title` is reserved for the primary page title.
 - Add a snapshot-v2 benchmark runner with frozen baseline, targeted 3-page, core 10-page, and full 17-page suites, per-page evidence reports, command telemetry, and PowerPoint-authoritative candidate renders.
 - Define reconstruction fidelity, single-line title, rich-text run, native table, source-bound asset, and fail-closed PowerPoint render rules in one canonical page prompt and Skill entry.
 - Replace the legacy controller scripts with deterministic `inspect`, `assets`, `build`, `text-fit`, `render`, `compare`, `assemble`, `formula`, and `doctor` tools.

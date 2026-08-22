@@ -541,6 +541,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         "font_environment_fingerprint": report.get("font_environment_fingerprint", ""),
         "text_adjustments": report.get("text_adjustments", []),
         "severe_text_adjustments": report.get("severe_text_adjustments", []),
+        "role_shrink_warnings": report.get("role_shrink_warnings", []),
         "typography_adjustments": report.get("typography_adjustments", []),
         "role_size_deviations": report.get("role_size_deviations", []),
         "warnings": report.get("warnings", []),

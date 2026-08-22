@@ -173,6 +173,50 @@ def test_typography_roles_apply_page_scaled_defaults_and_warn_on_core_shrink():
         assert adjustment["text_role"] == "slide_title"
         assert adjustment["font_size_source"] == "role_fallback"
         assert any("role shrink threshold" in warning for warning in payload["warnings"])
+        shrink = payload["role_shrink_warnings"][0]
+        assert shrink["text_excerpt"] == "放不下的页面主标题"
+        assert shrink["geometry_diagnostic"]["limiting_dimension"] in {"width", "height"}
+        assert len(shrink["geometry_diagnostic"]["required_content_px"]) == 2
+
+
+def test_role_deviation_compares_requested_size_not_fit_result():
+    with tempfile.TemporaryDirectory() as temporary:
+        page = Path(temporary)
+        Image.new("RGB", (1600, 900), "white").save(page / "source.png")
+        value = SlideManifest(1600, 900)
+        value.add_text([20, 20, 1200, 60], "宽标题", font_size_px=32, text_role="section_title")
+        value.add_text([20, 100, 120, 20], "同字号但框很小", font_size_px=32, text_role="section_title")
+        value.write(page / "manifest.json")
+
+        built = run_cli("build", page)
+
+        assert built.returncode == 0, built.stderr
+        payload = json.loads(built.stdout)
+        assert payload["role_shrink_warnings"]
+        assert payload["role_size_deviations"] == []
+
+
+def test_measured_same_role_size_override_is_auditable_not_a_warning():
+    with tempfile.TemporaryDirectory() as temporary:
+        page = Path(temporary)
+        Image.new("RGB", (1600, 900), "white").save(page / "source.png")
+        value = SlideManifest(1600, 900)
+        value.add_text([20, 20, 800, 60], "标题一", font_size_px=32, text_role="section_title")
+        value.add_text(
+            [20, 100, 800, 60],
+            "标题二",
+            font_size_px=28,
+            text_role="section_title",
+            font_size_source="measured",
+        )
+        value.write(page / "manifest.json")
+
+        built = run_cli("build", page)
+
+        assert built.returncode == 0, built.stderr
+        payload = json.loads(built.stdout)
+        assert payload["role_size_deviations"]
+        assert all("role median" not in warning for warning in payload["warnings"])
 
 
 def test_builder_accepts_common_aliases_and_source_pixel_font_sizes():
