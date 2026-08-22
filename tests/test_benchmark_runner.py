@@ -88,6 +88,22 @@ def test_text_coverage_ignores_dynamic_placeholders_and_text_hidden_by_later_pic
     }
 
 
+def test_text_coverage_excludes_low_confidence_ocr_from_exact_gate(tmp_path: Path):
+    pptx = tmp_path / "candidate.pptx"
+    presentation = Presentation()
+    presentation.slides.add_slide(presentation.slide_layouts[6])
+    presentation.save(pptx)
+    expected = tmp_path / "expected.json"
+    expected.write_text(json.dumps({"objects": [{
+        "kind": "text", "text": "5gt", "recognition_source": "macos-vision", "confidence": 0.3,
+    }]}, ensure_ascii=False))
+
+    metrics = _pptx_metrics(pptx, expected)
+
+    assert metrics["text_coverage"] is None
+    assert metrics["excluded_expected_texts"] == [{"text": "5gt", "reason": "low_confidence_ocr"}]
+
+
 def test_text_coverage_reports_exact_visible_missing_text(tmp_path: Path):
     pptx = tmp_path / "candidate.pptx"
     presentation = Presentation()
@@ -104,6 +120,67 @@ def test_text_coverage_reports_exact_visible_missing_text(tmp_path: Path):
     assert metrics["missing_texts"] == ["不能遗漏的版权句"]
 
 
+def test_text_coverage_matches_source_paragraphs_split_into_editable_boxes(tmp_path: Path):
+    pptx = tmp_path / "candidate.pptx"
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(1), Inches(1), Inches(3), Inches(0.5)).text = "案例标题"
+    slide.shapes.add_textbox(Inches(1), Inches(1.6), Inches(5), Inches(1)).text = "第一段完整原文"
+    presentation.save(pptx)
+    expected = tmp_path / "expected.json"
+    expected.write_text(json.dumps({
+        "image_size": [1600, 900],
+        "objects": [{
+            "kind": "text",
+            "text": "案例标题\n第一段完整原文",
+            "box_px": [80, 80, 700, 260],
+            "text_style": {"paragraphs": [
+                {"runs": [{"text": "案例标题"}]},
+                {"runs": [{"text": "第一段完整原文"}]},
+            ]},
+        }],
+    }, ensure_ascii=False))
+
+    metrics = _pptx_metrics(pptx, expected)
+
+    assert metrics["text_coverage"] == 1.0
+    assert metrics["expected_text_count"] == 2
+
+
+def test_text_coverage_normalizes_formula_wrappers_without_fixing_words(tmp_path: Path):
+    pptx = tmp_path / "candidate.pptx"
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1)).text = "加微转化率：≥25%"
+    presentation.save(pptx)
+    expected = tmp_path / "expected.json"
+    expected.write_text(json.dumps({
+        "image_size": [1600, 900],
+        "objects": [{"kind": "text", "text": r"加微转化率： $ \geq $25%", "box_px": [80, 80, 600, 150]}],
+    }, ensure_ascii=False))
+
+    metrics = _pptx_metrics(pptx, expected)
+
+    assert metrics["text_coverage"] == 1.0
+
+
+def test_exact_text_is_not_marked_missing_only_because_geometry_moved(tmp_path: Path):
+    pptx = tmp_path / "candidate.pptx"
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(8), Inches(5), Inches(3), Inches(1)).text = "逐字相同的内容"
+    presentation.save(pptx)
+    expected = tmp_path / "expected.json"
+    expected.write_text(json.dumps({
+        "image_size": [1600, 900],
+        "objects": [{"kind": "text", "text": "逐字相同的内容", "box_px": [20, 20, 200, 60]}],
+    }, ensure_ascii=False))
+
+    metrics = _pptx_metrics(pptx, expected)
+
+    assert metrics["text_coverage"] == 1.0
+
+
 def test_visual_ink_metric_ignores_light_background_style_changes(tmp_path: Path):
     source = tmp_path / "source.png"
     candidate = tmp_path / "candidate.png"
@@ -114,6 +191,20 @@ def test_visual_ink_metric_ignores_light_background_style_changes(tmp_path: Path
 
     assert metrics["content_ink_loss"] == 0.0
     assert metrics["coarse_rgb_loss"] > 0.0
+
+
+def test_visual_ink_metric_tolerates_four_pixel_raster_shift(tmp_path: Path):
+    source = Image.new("RGB", (200, 100), "white")
+    candidate = Image.new("RGB", (200, 100), "white")
+    for x in range(40, 120):
+        source.putpixel((x, 50), (0, 0, 0))
+        candidate.putpixel((x, 54), (0, 0, 0))
+    source.save(tmp_path / "source.png")
+    candidate.save(tmp_path / "candidate.png")
+
+    metrics = _visual_metrics(tmp_path / "source.png", tmp_path / "candidate.png", tmp_path / "compare")
+
+    assert metrics["content_ink_loss"] == 0.0
 
 
 def test_p2_visual_difference_remains_acceptable_for_human_review():
@@ -130,6 +221,21 @@ def test_p2_visual_difference_remains_acceptable_for_human_review():
 
     assert verdict == "acceptable"
     assert [value["severity"] for value in issues] == ["P2"]
+
+
+def test_one_high_confidence_missing_string_remains_needs_work():
+    verdict, issues = _issues({
+        "codex_powerpoint_rendered": True,
+        "text_coverage": 0.99,
+        "missing_texts": ["BoteClaw"],
+        "max_picture_coverage": 0.1,
+        "out_of_bounds_count": 0,
+        "coarse_rgb_loss": 0.0,
+        "content_ink_loss": 0.0,
+    })
+
+    assert verdict == "needs_work"
+    assert any(value["category"] == "content" for value in issues)
 
 
 def test_direct_powerpoint_automation_is_rejected():

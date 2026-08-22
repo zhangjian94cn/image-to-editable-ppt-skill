@@ -132,6 +132,40 @@ def test_polygon_helper_uses_source_space_points():
     assert item["polygon_px"] == [[10.0, 20.0], [110.0, 20.0], [80.0, 90.0], [20.0, 70.0]]
 
 
+def test_shape_helper_accepts_kind_first_and_open_polyline_points():
+    value = SlideManifest(1600, 900)
+    rect = value.add_shape("rect", box_px=[20, 30, 100, 50], fill="#EAF3FF")
+    path = value.add_shape(
+        "line",
+        points_px=[[100, 100], [160, 100], [160, 180], [240, 180]],
+        stroke="#0A65B7",
+        stroke_width=2,
+        end_arrow="triangle",
+    )
+
+    assert rect["box_px"] == [20.0, 30.0, 100.0, 50.0]
+    assert path["type"] == "polyline"
+    assert path["polyline_px"][-1] == [240.0, 180.0]
+
+
+def test_polyline_builds_an_open_editable_freeform_path():
+    with tempfile.TemporaryDirectory() as temporary:
+        page = Path(temporary)
+        Image.new("RGB", (1600, 900), "white").save(page / "source.png")
+        value = SlideManifest(1600, 900)
+        value.add_polyline([[100, 100], [400, 100], [400, 250]], end_arrow="triangle")
+        value.write(page / "manifest.json")
+
+        built = run_cli("build", page)
+
+        assert built.returncode == 0, built.stderr
+        with zipfile.ZipFile(page / "page.pptx") as package:
+            slide_xml = package.read("ppt/slides/slide1.xml").decode("utf-8")
+        assert '<a:path w="21600" h="21600" fill="none">' in slide_xml
+        assert "<a:close/>" not in slide_xml
+        assert '<a:tailEnd type="triangle"/>' in slide_xml
+
+
 def test_builder_surfaces_severe_automatic_text_shrink():
     with tempfile.TemporaryDirectory() as temporary:
         page = Path(temporary)

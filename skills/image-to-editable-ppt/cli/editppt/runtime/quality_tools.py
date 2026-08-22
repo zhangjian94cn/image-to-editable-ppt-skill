@@ -20,6 +20,7 @@ from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 from powerpoint_render import render_one_page
+from editppt.text_evidence import region_text_coverage
 
 
 POWERPOINT_APP = Path("/Applications/Microsoft PowerPoint.app")
@@ -113,11 +114,12 @@ def _shape_text(shape: Any) -> str:
     return ""
 
 
-def inspect_pptx(path: Path) -> dict[str, Any]:
+def inspect_pptx(path: Path, text_hints_path: Path | None = None) -> dict[str, Any]:
     presentation = Presentation(str(path))
     slide_width = int(presentation.slide_width)
     slide_height = int(presentation.slide_height)
     pages: list[dict[str, Any]] = []
+    candidate_regions: list[dict[str, Any]] = []
     total = {
         "object_count": 0,
         "text_shape_count": 0,
@@ -148,6 +150,11 @@ def inspect_pptx(path: Path) -> dict[str, Any]:
                 "has_table": table,
             }
             objects.append(record)
+            if text:
+                candidate_regions.append({
+                    "text": text,
+                    "box_emu": [left, top, width, height],
+                })
             total["object_count"] += 1
             total["text_shape_count"] += int(bool(text))
             total["picture_count"] += int(picture)
@@ -158,7 +165,7 @@ def inspect_pptx(path: Path) -> dict[str, Any]:
             total["max_picture_coverage"] = max(total["max_picture_coverage"], coverage)
         pages.append({"page": page_index, "objects": objects})
     total["max_picture_coverage"] = round(float(total["max_picture_coverage"]), 6)
-    return {
+    payload = {
         "schema_version": 1,
         "pptx": str(path.resolve()),
         "sha256": sha256(path),
@@ -171,6 +178,37 @@ def inspect_pptx(path: Path) -> dict[str, Any]:
         },
         "pages": pages,
     }
+    if text_hints_path and text_hints_path.is_file() and len(presentation.slides) == 1:
+        try:
+            hints = json.loads(text_hints_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            hints = {}
+        source = hints.get("source") or {}
+        source_width = float(source.get("width_px") or slide_width)
+        source_height = float(source.get("height_px") or slide_height)
+        normalized_candidates = []
+        for region in candidate_regions:
+            left, top, width, height = region["box_emu"]
+            normalized_candidates.append({
+                "text": region["text"],
+                "box_px": [
+                    left / slide_width * source_width,
+                    top / slide_height * source_height,
+                    width / slide_width * source_width,
+                    height / slide_height * source_height,
+                ],
+            })
+        expected = [
+            {"text": str(line.get("text") or ""), "box_px": line.get("box_px")}
+            for line in hints.get("lines", []) if isinstance(line, dict)
+        ]
+        evidence = region_text_coverage(expected, normalized_candidates)
+        evidence["source"] = str(text_hints_path.resolve())
+        evidence["advisory"] = True
+        payload["text_evidence"] = evidence
+        total["text_hint_coverage"] = evidence["text_coverage"]
+        total["text_hint_missing_count"] = evidence["missing_text_count"]
+    return payload
 
 
 def compare_images(source: Path, candidate: Path, out_dir: Path) -> dict[str, Any]:

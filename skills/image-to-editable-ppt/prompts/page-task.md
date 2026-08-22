@@ -12,6 +12,10 @@ steps verbatim; do not shorten or paraphrase text that is difficult to read.
 You may use the Skill's OCR,
 layout, structure, source-pixel asset, Builder, text-fit, PowerPoint render,
 PPTX inspection, and comparison tools.
+After `editppt inspect text .`, view every path in `detail_images` when the
+source contains faint or small footer text. Before finalizing, run
+`editppt inspect pptx .`; read `text_evidence.missing_texts` and either restore
+each visible source line or explicitly verify that the OCR hint is wrong.
 
 `source.png` has already been normalized to the canonical authoring coordinate
 space used by Codex vision. Run `editppt inspect layout .`, use the returned
@@ -46,6 +50,9 @@ resulting `preview.png`. Repair visible content omissions, overlaps, overflow,
 unexpected wrapping, and obvious geometry differences, then render again as
 needed. Do not declare success from a manifest preview, object count, or ZIP
 check. If Microsoft PowerPoint cannot render the file, do not report ready.
+Keep product names, English identifiers, capitalization, uncommon spellings,
+and version strings exactly as shown. Do not rewrite a rare source term into a
+more familiar one.
 
 Treat the Skill checkout as read-only. Do not inspect, patch, or replace its
 runtime implementation from a page task. `editppt render` exclusively owns the

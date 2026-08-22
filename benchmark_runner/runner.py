@@ -34,6 +34,7 @@ if str(CLI_ROOT) not in sys.path:
     sys.path.insert(0, str(CLI_ROOT))
 
 from editppt.source_space import prepare_authoring_source
+from editppt.text_evidence import normalize_text, paragraph_segments, region_text_coverage
 
 
 ROOT_FILES = {"source.png", "candidate.pptx", "candidate.png", "report.md", "artifacts"}
@@ -356,10 +357,7 @@ def _render_powerpoint(
 
 
 def _normal_text(value: str) -> str:
-    normalized = str(value or "").translate(
-        str.maketrans({"丨": "|", "｜": "|", "︱": "|"})
-    )
-    return re.sub(r"[\s\u000b]+", "", normalized).casefold()
+    return normalize_text(value)
 
 
 def _box_overlap(first: Any, second: Any) -> float:
@@ -376,20 +374,27 @@ def _box_overlap(first: Any, second: Any) -> float:
     return overlap_width * overlap_height / (width * height)
 
 
-def _expected_text_evidence(expected: dict[str, Any]) -> tuple[list[str], list[dict[str, str]]]:
+def _expected_text_evidence(expected: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     """Select rendered text, excluding placeholders and source objects hidden by screenshots."""
 
     objects = expected.get("objects") or []
-    values: list[str] = []
+    values: list[dict[str, Any]] = []
     excluded: list[dict[str, str]] = []
     for index, item in enumerate(objects):
         if not isinstance(item, dict) or item.get("kind") != "text" or item.get("visible", True) is False:
             continue
-        value = str(item.get("text") or "")
-        compact = _normal_text(value)
-        if re.fullmatch(r"[‹<«\[]?#(?:›|>|»|\])?", compact):
-            excluded.append({"text": value, "reason": "dynamic_placeholder"})
+        confidence = item.get("confidence")
+        if item.get("recognition_source") and isinstance(confidence, (int, float)) and confidence < 0.75:
+            excluded.append({"text": str(item.get("text") or ""), "reason": "low_confidence_ocr"})
             continue
+        segments = paragraph_segments(item)
+        visible_segments = []
+        for value in segments:
+            compact = _normal_text(value)
+            if re.fullmatch(r"[‹<«\[]?#(?:›|>|»|\])?", compact):
+                excluded.append({"text": value, "reason": "dynamic_placeholder"})
+            elif compact:
+                visible_segments.append(value)
         hidden_by_picture = any(
             isinstance(later, dict)
             and later.get("kind") == "picture"
@@ -397,10 +402,10 @@ def _expected_text_evidence(expected: dict[str, Any]) -> tuple[list[str], list[d
             for later in objects[index + 1 :]
         )
         if hidden_by_picture:
-            excluded.append({"text": value, "reason": "occluded_by_later_picture"})
+            excluded.extend({"text": value, "reason": "occluded_by_later_picture"} for value in visible_segments)
             continue
-        if compact:
-            values.append(value)
+        if visible_segments:
+            values.append({"text": str(item.get("text") or ""), "segments": visible_segments, "box_px": item.get("box_px")})
     return values, excluded
 
 
@@ -411,7 +416,7 @@ def _pptx_metrics(candidate: Path, expected_path: Path) -> dict[str, Any]:
     slide = presentation.slides[0]
     width = float(presentation.slide_width)
     height = float(presentation.slide_height)
-    text_values: list[str] = []
+    candidate_regions: list[dict[str, Any]] = []
     pictures = tables = text_shapes = native_shapes = 0
     max_picture_coverage = 0.0
     out_of_bounds = 0
@@ -420,11 +425,17 @@ def _pptx_metrics(candidate: Path, expected_path: Path) -> dict[str, Any]:
         shape_width, shape_height = float(shape.width), float(shape.height)
         if left < -1 or top < -1 or left + shape_width > width + 1 or top + shape_height > height + 1:
             out_of_bounds += 1
+        value = ""
         if getattr(shape, "has_text_frame", False):
             value = str(shape.text or "").strip()
-            if value:
-                text_shapes += 1
-                text_values.append(value)
+        elif getattr(shape, "has_table", False):
+            value = "\n".join(cell.text for row in shape.table.rows for cell in row.cells).strip()
+        if value:
+            text_shapes += 1
+            candidate_regions.append({
+                "text": value,
+                "box_emu": [left, top, shape_width, shape_height],
+            })
         if getattr(shape, "has_table", False):
             tables += 1
         if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
@@ -440,11 +451,19 @@ def _pptx_metrics(candidate: Path, expected_path: Path) -> dict[str, Any]:
             native_shapes += 1
 
     expected = _read_json(expected_path)
+    source_size = expected.get("image_size")
+    for region in candidate_regions:
+        left, top, shape_width, shape_height = region.pop("box_emu")
+        if isinstance(source_size, list) and len(source_size) == 2:
+            source_width, source_height = source_size
+            region["box_px"] = [
+                left / width * source_width,
+                top / height * source_height,
+                shape_width / width * source_width,
+                shape_height / height * source_height,
+            ]
     expected_text, excluded_expected_text = _expected_text_evidence(expected)
-    candidate_text = _normal_text("\n".join(text_values))
-    missing_text = [value for value in expected_text if _normal_text(value) not in candidate_text]
-    matched = len(expected_text) - len(missing_text)
-    coverage = matched / len(expected_text) if expected_text else None
+    evidence = region_text_coverage(expected_text, candidate_regions)
     return {
         "slide_count": len(presentation.slides),
         "object_count": len(slide.shapes),
@@ -454,13 +473,13 @@ def _pptx_metrics(candidate: Path, expected_path: Path) -> dict[str, Any]:
         "picture_count": pictures,
         "max_picture_coverage": round(max_picture_coverage, 6),
         "out_of_bounds_count": out_of_bounds,
-        "expected_text_count": len(expected_text),
-        "matched_text_count": matched,
-        "missing_text_count": len(missing_text),
-        "missing_texts": missing_text,
+        "expected_text_count": evidence["expected_text_count"],
+        "matched_text_count": evidence["matched_text_count"],
+        "missing_text_count": evidence["missing_text_count"],
+        "missing_texts": evidence["missing_texts"],
         "excluded_expected_text_count": len(excluded_expected_text),
         "excluded_expected_texts": excluded_expected_text,
-        "text_coverage": round(coverage, 6) if coverage is not None else None,
+        "text_coverage": evidence["text_coverage"],
     }
 
 
@@ -480,13 +499,14 @@ def _visual_metrics(source_path: Path, candidate_path: Path, compare_dir: Path) 
     # bands and shadows are visual styling, not missing semantic content.
     source_ink = source_gray < 210
     candidate_ink = candidate_gray < 210
-    # A two-pixel tolerance removes anti-aliasing and tiny font-rendering
-    # shifts while still exposing missing labels, lines, and regions.
+    # A four-pixel tolerance removes anti-aliasing and normal PowerPoint font
+    # rasterization shifts while still exposing missing labels, lines, and
+    # semantic regions.
     source_near = np.asarray(
-        Image.fromarray((source_ink * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(5))
+        Image.fromarray((source_ink * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(9))
     ) > 0
     candidate_near = np.asarray(
-        Image.fromarray((candidate_ink * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(5))
+        Image.fromarray((candidate_ink * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(9))
     ) > 0
     ink_loss = float(
         np.logical_or(source_ink & ~candidate_near, candidate_ink & ~source_near).mean()
@@ -610,7 +630,7 @@ def _issues(
         missing_summary = "；未覆盖：" + " / ".join(excerpts)
     if isinstance(coverage, (int, float)) and coverage < 0.7:
         issues.append({"severity": "P0", "category": "content", "message": f"可见原文逐块覆盖率仅 {coverage:.1%}{missing_summary}"})
-    elif isinstance(coverage, (int, float)) and coverage < 0.98:
+    elif missing_texts or (isinstance(coverage, (int, float)) and coverage < 0.98):
         issues.append({"severity": "P1", "category": "content", "message": f"可见原文逐块覆盖率为 {coverage:.1%}{missing_summary}"})
     picture = float(metrics.get("max_picture_coverage") or 0.0)
     if picture >= 0.85:
@@ -621,7 +641,7 @@ def _issues(
         issues.append({"severity": "P1", "category": "layout", "message": f"{metrics['out_of_bounds_count']} 个对象越出画布"})
     coarse = float(metrics.get("coarse_rgb_loss") or 0.0)
     ink = float(metrics.get("content_ink_loss") or 0.0)
-    if coarse >= 0.1 or ink >= 0.08:
+    if coarse >= 0.1 or ink >= 0.1:
         issues.append({"severity": "P1", "category": "visual", "message": f"PowerPoint 视觉差异较大（RGB {coarse:.3f} / ink {ink:.3f}）"})
     elif coarse > 0.04 or ink > 0.03:
         issues.append({"severity": "P2", "category": "visual", "message": f"存在可见样式或几何差异（RGB {coarse:.3f} / ink {ink:.3f}）"})

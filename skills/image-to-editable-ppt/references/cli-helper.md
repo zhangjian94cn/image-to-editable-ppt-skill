@@ -30,6 +30,12 @@ editppt inspect pptx /page --input page.pptx
 - `pptx`: native object, text, table, connector, picture-coverage, and boundary
   readback.
 
+`inspect text` also writes `.editppt/inspect/footer-detail.png`; with
+content-aware OCR configured it performs a second pass on that enlarged,
+high-contrast footer strip. `inspect pptx` compares editable text against
+`text_hints.json` and exposes advisory `text_evidence.missing_texts`. Verify
+each line against the visible source rather than blindly accepting OCR.
+
 `layout`'s `size_px` is the canonical authoring space. Use it verbatim. Do not
 derive coordinates from a resized chat preview and do not later multiply or
 divide a whole manifest to chase a display scale.

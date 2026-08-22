@@ -155,15 +155,20 @@ def px_to_inches(manifest, x, y, width, height):
 def normalize_position_item(manifest, item):
     item = dict(item)
     raw_points = item.get("points_px")
-    if (
-        isinstance(raw_points, list)
-        and len(raw_points) >= 3
-        and all(isinstance(point, (list, tuple)) and len(point) == 2 for point in raw_points)
-    ):
-        if item.get("polygon_px") is not None:
-            raise ValueError("provide polygon_px or nested points_px, not both")
-        item["polygon_px"] = raw_points
-        item.pop("points_px", None)
+    if isinstance(raw_points, list) and all(isinstance(point, (list, tuple)) and len(point) == 2 for point in raw_points):
+        if item.get("type") in {"line", "polyline"}:
+            if len(raw_points) < 2:
+                raise ValueError("a line/polyline requires at least two [x, y] points")
+            if item.get("polyline_px") is not None:
+                raise ValueError("provide polyline_px or nested points_px, not both")
+            item["type"] = "polyline"
+            item["polyline_px"] = raw_points
+            item.pop("points_px", None)
+        elif len(raw_points) >= 3:
+            if item.get("polygon_px") is not None:
+                raise ValueError("provide polygon_px or nested points_px, not both")
+            item["polygon_px"] = raw_points
+            item.pop("points_px", None)
     if "polygon_px" in item:
         points = [(float(point[0]), float(point[1])) for point in item["polygon_px"]]
         if points and "box_px" not in item:
@@ -174,13 +179,28 @@ def normalize_position_item(manifest, item):
             [px_to_inches(manifest, point[0], point[1], 0, 0)["left"], px_to_inches(manifest, point[0], point[1], 0, 0)["top"]]
             for point in points
         ]
+    if "polyline_px" in item:
+        points = [(float(point[0]), float(point[1])) for point in item["polyline_px"]]
+        if len(points) < 2:
+            raise ValueError("polyline_px requires at least two [x, y] points")
+        if "box_px" not in item:
+            xs = [point[0] for point in points]
+            ys = [point[1] for point in points]
+            item["box_px"] = [min(xs), min(ys), max(1.0, max(xs) - min(xs)), max(1.0, max(ys) - min(ys))]
+        item["polyline"] = [
+            [px_to_inches(manifest, point[0], point[1], 0, 0)["left"], px_to_inches(manifest, point[0], point[1], 0, 0)["top"]]
+            for point in points
+        ]
     if "box_px" in item:
         x, y, width, height = item["box_px"]
         item.update(px_to_inches(manifest, x, y, width, height))
     if "points_px" in item:
         values = item["points_px"]
         if not isinstance(values, list) or len(values) != 4 or any(isinstance(value, (list, tuple, dict)) for value in values):
-            raise ValueError("points_px must be [x1, y1, x2, y2]; use polygon_px for three or more [x, y] points")
+            raise ValueError(
+                "points_px must be [x1, y1, x2, y2]; use nested [x, y] points "
+                "with type=polyline for an open path or type=polygon for a closed shape"
+            )
         x1, y1, x2, y2 = values
         left = min(float(x1), float(x2))
         top = min(float(y1), float(y2))
@@ -682,6 +702,8 @@ def shape_xml(idx, item):
     preset = item.get("preset")
     if item.get("polygon_px"):
         geometry = custom_polygon_geometry_xml(item)
+    elif item.get("polyline_px"):
+        geometry = custom_polyline_geometry_xml(item)
     else:
         if not preset:
             preset = "line" if kind == "line" else "ellipse" if kind == "ellipse" else "roundRect" if kind == "roundRect" else "rect"
@@ -729,6 +751,32 @@ def custom_polygon_geometry_xml(item):
         '<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/>'
         '<a:rect l="l" t="t" r="r" b="b"/>'
         '<a:pathLst><a:path w="21600" h="21600">'
+        + "".join(segments)
+        + "</a:path></a:pathLst></a:custGeom>"
+    )
+
+
+def custom_polyline_geometry_xml(item):
+    points = [(float(point[0]), float(point[1])) for point in item.get("polyline_px", [])]
+    if len(points) < 2:
+        return '<a:prstGeom prst="line"><a:avLst/></a:prstGeom>'
+    left, top, width, height = [float(value) for value in item.get("box_px", [0, 0, 1, 1])]
+    width = max(width, 1.0)
+    height = max(height, 1.0)
+
+    def rel_coord(point):
+        x, y = point
+        return int(round((x - left) / width * 21600)), int(round((y - top) / height * 21600))
+
+    first_x, first_y = rel_coord(points[0])
+    segments = [f'<a:moveTo><a:pt x="{first_x}" y="{first_y}"/></a:moveTo>']
+    for point in points[1:]:
+        x, y = rel_coord(point)
+        segments.append(f'<a:lnTo><a:pt x="{x}" y="{y}"/></a:lnTo>')
+    return (
+        '<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/>'
+        '<a:rect l="l" t="t" r="r" b="b"/>'
+        '<a:pathLst><a:path w="21600" h="21600" fill="none">'
         + "".join(segments)
         + "</a:path></a:pathLst></a:custGeom>"
     )
@@ -1220,6 +1268,9 @@ def render_preview(manifest, manifest_path, out_path):
         if item.get("polygon"):
             points = [(point[0] * scale, point[1] * scale) for point in item["polygon"]]
             draw.polygon(points, fill=None if fill in (None, "none") else fill, outline=None if outline == "none" else outline)
+        elif item.get("polyline"):
+            points = [(point[0] * scale, point[1] * scale) for point in item["polyline"]]
+            draw.line(points, fill=outline, width=width)
         elif item.get("type") == "line":
             if "points" in item:
                 points = [value * scale for value in item["points"]]

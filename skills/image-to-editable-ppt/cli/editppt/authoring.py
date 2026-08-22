@@ -53,9 +53,11 @@ class SlideManifest:
 
     def add_shape(
         self,
-        box_px: Box,
-        kind: str = "rect",
+        box_or_kind: Box | str | None = None,
+        kind: str | None = None,
         *,
+        box_px: Box | None = None,
+        points_px: Sequence[Point] | Sequence[float] | None = None,
         fill: str = "none",
         stroke: str = "none",
         stroke_width: float = 1,
@@ -64,9 +66,46 @@ class SlideManifest:
         z_index: float = 100,
         **extra: Any,
     ) -> dict[str, Any]:
+        if isinstance(box_or_kind, str):
+            if kind is not None and kind != box_or_kind:
+                raise ValueError("shape kind was provided twice")
+            resolved_kind = box_or_kind
+            resolved_box = box_px
+        else:
+            resolved_kind = kind or "rect"
+            if box_or_kind is not None and box_px is not None:
+                raise ValueError("shape box was provided twice")
+            resolved_box = box_or_kind if box_or_kind is not None else box_px
+
+        if points_px is not None:
+            if resolved_kind not in {"line", "polyline"}:
+                raise ValueError("points_px is only valid for line or polyline shapes")
+            values = list(points_px)
+            if len(values) == 4 and not any(isinstance(value, (list, tuple)) for value in values):
+                x1, y1, x2, y2 = [float(value) for value in values]
+                item = {
+                    "type": "line",
+                    "points_px": [x1, y1, x2, y2],
+                    "fill": "none",
+                    "stroke": stroke,
+                    "stroke_width": float(stroke_width),
+                    "z_index": float(z_index),
+                }
+                item.update(extra)
+                self.shapes.append(item)
+                return item
+            return self.add_polyline(
+                values,
+                stroke=stroke,
+                stroke_width=stroke_width,
+                z_index=z_index,
+                **extra,
+            )
+        if resolved_box is None:
+            raise ValueError("box_px is required unless line/polyline points_px is provided")
         item: dict[str, Any] = {
-            "type": kind,
-            "box_px": _box(box_px),
+            "type": resolved_kind,
+            "box_px": _box(resolved_box),
             "fill": fill,
             "stroke": stroke,
             "stroke_width": float(stroke_width),
@@ -140,6 +179,42 @@ class SlideManifest:
             "stroke_width": float(stroke_width),
             "z_index": float(z_index),
         }
+        item.update(extra)
+        self.shapes.append(item)
+        return item
+
+    def add_polyline(
+        self,
+        points_px: Sequence[Point],
+        *,
+        stroke: str = "#4472C4",
+        stroke_width: float = 1.25,
+        dash: str = "",
+        start_arrow: str = "none",
+        end_arrow: str = "none",
+        z_index: float = 140,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        """Add an open editable source-space path with two or more vertices."""
+
+        points = [_point(value) for value in points_px]
+        if len(points) < 2:
+            raise ValueError("polyline requires at least two source-space points")
+        xs = [value[0] for value in points]
+        ys = [value[1] for value in points]
+        item: dict[str, Any] = {
+            "type": "polyline",
+            "box_px": [min(xs), min(ys), max(1.0, max(xs) - min(xs)), max(1.0, max(ys) - min(ys))],
+            "polyline_px": [[x, y] for x, y in points],
+            "fill": "none",
+            "stroke": stroke,
+            "stroke_width": float(stroke_width),
+            "start_arrow": start_arrow,
+            "end_arrow": end_arrow,
+            "z_index": float(z_index),
+        }
+        if dash:
+            item["dash"] = dash
         item.update(extra)
         self.shapes.append(item)
         return item

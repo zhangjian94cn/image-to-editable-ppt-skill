@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from PIL import Image, ImageOps
+
 # ``main.py`` remains directly executable for diagnostics and tests.  Make the
 # package root discoverable before importing runtime modules that share public
 # helpers from ``editppt``.
@@ -30,6 +32,7 @@ from runtime_env import config_path, read_config_file
 from source_inspect import inspect_layout, inspect_structure
 from text_fit_tool import measure as measure_text
 from text_fit_tool import write_result as write_text_fit
+from editppt.text_evidence import normalize_text
 
 
 RUNTIME_DIR = Path(__file__).resolve().parent
@@ -74,6 +77,104 @@ def _configured_paddle_token() -> str:
         return ""
 
 
+def _write_footer_detail(source: Path, page_dir: Path) -> tuple[Path, list[dict[str, float]]]:
+    """Write a high-contrast, enlarged footer strip for exact small-text review."""
+
+    detail_dir = page_dir / ".editppt/inspect"
+    detail_dir.mkdir(parents=True, exist_ok=True)
+    output = detail_dir / "footer-detail.png"
+    with Image.open(source).convert("RGB") as image:
+        top = int(round(image.height * 0.94))
+        strip_height = image.height - top
+        tile_count = 3
+        core_width = int(round(image.width / tile_count))
+        overlap = max(24, int(round(image.width * 0.035)))
+        # Legal footers are often lighter than #E0E0E0.  A high white-point
+        # threshold reveals them without fabricating glyphs, while the narrow
+        # band keeps main-page copy out of the detail OCR pass.
+        scale = 4.0
+        separator = 18
+        tiles = []
+        mappings: list[dict[str, float]] = []
+        for index in range(tile_count):
+            left = max(0, index * core_width - (overlap if index else 0))
+            right = min(image.width, (index + 1) * core_width + (overlap if index < tile_count - 1 else 0))
+            tile = image.crop((left, top, right, image.height)).convert("L")
+            tile = ImageOps.autocontrast(tile, cutoff=1).point(lambda value: 0 if value < 247 else 255)
+            tile = tile.resize((int((right - left) * scale), int(strip_height * scale)), Image.Resampling.LANCZOS)
+            tiles.append(tile)
+            mappings.append({
+                "source_left": float(left),
+                "source_top": float(top),
+                "scale": scale,
+                "output_top": float(index * (int(strip_height * scale) + separator)),
+                "output_height": float(tile.height),
+            })
+        canvas = Image.new("L", (max(tile.width for tile in tiles), sum(tile.height for tile in tiles) + separator * (tile_count - 1)), 255)
+        for mapping, tile in zip(mappings, tiles):
+            canvas.paste(tile, (0, int(mapping["output_top"])))
+        canvas.convert("RGB").save(output)
+    return output, mappings
+
+
+def _merge_footer_hints(
+    page_dir: Path,
+    hints: dict[str, Any],
+    footer_path: Path,
+    mappings: list[dict[str, float]],
+) -> dict[str, Any]:
+    detail = _json(page_dir / ".editppt/inspect/footer-hints.json")
+    existing = {normalize_text(str(value.get("text") or "")) for value in hints.get("lines", []) if isinstance(value, dict)}
+    added = 0
+    for line in detail.get("lines", []):
+        if not isinstance(line, dict) or not normalize_text(str(line.get("text") or "")):
+            continue
+        text_key = normalize_text(str(line.get("text") or ""))
+        if text_key in existing or any(
+            len(text_key) >= 4 and (text_key in known or known in text_key)
+            for known in existing if len(known) >= 4
+        ):
+            continue
+        value = dict(line)
+        box = value.get("box_px") or []
+        mapping = None
+        if len(box) == 4:
+            center_y = float(box[1]) + float(box[3]) / 2
+            mapping = next(
+                (
+                    candidate for candidate in mappings
+                    if candidate["output_top"] <= center_y <= candidate["output_top"] + candidate["output_height"]
+                ),
+                None,
+            )
+        scale = mapping["scale"] if mapping else 1.0
+        if len(box) == 4 and mapping:
+            value["box_px"] = [
+                mapping["source_left"] + float(box[0]) / scale,
+                mapping["source_top"] + (float(box[1]) - mapping["output_top"]) / scale,
+                float(box[2]) / scale,
+                float(box[3]) / scale,
+            ]
+        elif len(box) == 4:
+            continue
+        for key in ("glyph_height_px", "group_glyph_px"):
+            if value.get(key) is not None:
+                value[key] = round(float(value[key]) / scale, 1)
+        for key in ("font_pt", "font_pt_if_cjk", "font_pt_if_latin"):
+            if value.get(key) is not None:
+                value[key] = round(float(value[key]) / scale, 1)
+        value["evidence_pass"] = "footer-detail"
+        hints.setdefault("lines", []).append(value)
+        existing.add(text_key)
+        added += 1
+    hints["lines"].sort(key=lambda line: (float((line.get("box_px") or [0, 0])[1]), float((line.get("box_px") or [0, 0])[0])))
+    for index, line in enumerate(hints["lines"], start=1):
+        line["id"] = f"P{index:02d}"
+    hints["detail_images"] = [str(footer_path.relative_to(page_dir))]
+    hints["footer_detail_added_lines"] = added
+    return hints
+
+
 def cmd_prepare(args: argparse.Namespace) -> int:
     deck = normalize_inputs(args.inputs, out_root=args.out_root, job_dir=args.job_dir, dpi=args.dpi)
     payload = _json(deck)
@@ -89,6 +190,7 @@ def cmd_inspect_text(args: argparse.Namespace) -> int:
         return 2
     command: list[object] = [page_dir, "--source", args.source, "--out", args.out]
     command += ["--overlay", args.overlay if args.overlay else ""]
+    footer_path, footer_mappings = _write_footer_detail(source, page_dir)
     token = _configured_paddle_token()
     if token:
         child_env = os.environ.copy()
@@ -104,6 +206,21 @@ def cmd_inspect_text(args: argparse.Namespace) -> int:
         print(completed.stderr or completed.stdout, file=sys.stderr)
         return completed.returncode
     hints = _json(page_dir / args.out)
+    if token and getattr(args, "detail_ocr", True):
+        footer_command: list[object] = [
+            page_dir,
+            "--source", str(footer_path.relative_to(page_dir)),
+            "--out", ".editppt/inspect/footer-hints.json",
+            "--overlay", ".editppt/inspect/footer-hints.png",
+            "--min-glyph", 4,
+        ]
+        child_env = os.environ.copy()
+        child_env["PADDLE_OCR_TOKEN"] = token
+        footer_completed = _script("paddle_text_hints.py", *footer_command, capture=True, env=child_env)
+        if footer_completed.returncode != 0:
+            hints["footer_detail_warning"] = (footer_completed.stderr or footer_completed.stdout or "footer OCR failed").strip()[:240]
+    hints = _merge_footer_hints(page_dir, hints, footer_path, footer_mappings)
+    (page_dir / args.out).write_text(json.dumps(hints, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     lines = hints.get("lines") if isinstance(hints.get("lines"), list) else []
     backend = str(hints.get("backend") or hints.get("source") or "local-geometric")
     real_ocr = backend not in {"local", "local-geometric", "geometric", "projection-components"}
@@ -113,6 +230,8 @@ def cmd_inspect_text(args: argparse.Namespace) -> int:
         "real_ocr": real_ocr,
         "text_hints": str(page_dir / args.out),
         "overlay": str(page_dir / args.overlay) if args.overlay else "",
+        "detail_images": hints.get("detail_images", []),
+        "footer_detail_added_lines": int(hints.get("footer_detail_added_lines") or 0),
         "line_count": len(lines),
     })
     return 0
@@ -135,7 +254,8 @@ def cmd_inspect_structure(args: argparse.Namespace) -> int:
 def cmd_inspect_pptx(args: argparse.Namespace) -> int:
     page = Path(args.page_dir).expanduser().resolve()
     path = page / args.input
-    payload = inspect_pptx(path)
+    hints = page / args.text_hints if args.text_hints else None
+    payload = inspect_pptx(path, hints)
     out = page / args.out
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     _print_json(payload)
@@ -362,6 +482,12 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_text.add_argument("--source", default="source.png")
     inspect_text.add_argument("--out", default="text_hints.json")
     inspect_text.add_argument("--overlay", default="text_hints.png")
+    inspect_text.add_argument(
+        "--detail-ocr",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run a second OCR pass on an enlarged high-contrast footer strip when content-aware OCR is available.",
+    )
     inspect_text.set_defaults(func=cmd_inspect_text)
     inspect_layout_parser = inspect_sub.add_parser("layout", help="Measure broad content and whitespace bands.")
     inspect_layout_parser.add_argument("page_dir")
@@ -377,6 +503,11 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_pptx_parser.add_argument("page_dir")
     inspect_pptx_parser.add_argument("--input", default="page.pptx")
     inspect_pptx_parser.add_argument("--out", default="pptx-inspect.json")
+    inspect_pptx_parser.add_argument(
+        "--text-hints",
+        default="text_hints.json",
+        help="Advisory OCR evidence to compare with editable PPTX text; pass an empty string to skip.",
+    )
     inspect_pptx_parser.set_defaults(func=cmd_inspect_pptx)
 
     assets = sub.add_parser("assets", help="Extract or resolve independent source-bound assets.")

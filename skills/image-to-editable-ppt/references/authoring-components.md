@@ -49,6 +49,10 @@ page.add_connector([350, 272], [410, 272], end_arrow="triangle")
 
 The connector is a native PowerPoint connector, not a decorative rectangle or
 raster arrow. Use `preset="bentConnector3"` for orthogonal routing.
+For a bracket or open path with more than one bend, use
+`page.add_polyline([[x1, y1], [x2, y2], ...])`. The equivalent
+`page.add_shape("line", points_px=[[...], ...])` form is supported. Use
+`add_polygon` only for a closed filled shape.
 
 ## Cards and section bands
 

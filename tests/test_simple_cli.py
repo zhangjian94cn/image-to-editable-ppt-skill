@@ -139,6 +139,28 @@ class SimpleCliTest(unittest.TestCase):
                 self.assertIn("ppt/viewProps.xml", package.namelist())
                 self.assertIn("docProps/thumbnail.jpeg", package.namelist())
 
+    def test_inspect_pptx_reports_missing_ocr_text_near_its_source_region(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            page = Path(temporary)
+            Image.new("RGB", (1600, 900), "white").save(page / "source.png")
+            (page / "manifest.json").write_text(json.dumps(manifest("已保留标题"), ensure_ascii=False))
+            built = run_cli("build", page)
+            self.assertEqual(0, built.returncode, built.stderr)
+            (page / "text_hints.json").write_text(json.dumps({
+                "source": {"width_px": 1600, "height_px": 900},
+                "lines": [
+                    {"text": "已保留标题", "box_px": [120, 80, 1360, 90]},
+                    {"text": "不能遗漏的页脚", "box_px": [120, 840, 600, 30]},
+                ],
+            }, ensure_ascii=False))
+
+            inspected = run_cli("inspect", "pptx", page)
+
+            self.assertEqual(0, inspected.returncode, inspected.stderr)
+            payload = json.loads(inspected.stdout)
+            self.assertEqual(0.5, payload["summary"]["text_hint_coverage"])
+            self.assertEqual(["不能遗漏的页脚"], payload["text_evidence"]["missing_texts"])
+
     def test_assemble_passes_independent_page_pptx_in_order(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
