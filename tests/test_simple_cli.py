@@ -309,6 +309,7 @@ class SimpleCliTest(unittest.TestCase):
             })
             self.assertEqual(0, second.returncode, second.stderr)
             self.assertTrue(json.loads(second.stdout)["cache_hit"])
+            self.assertTrue(json.loads((page / ".editppt/evidence.json").read_text())["cache_hit"])
 
     def test_trace_records_actual_command_exit_and_duration(self):
         with tempfile.TemporaryDirectory() as temporary:

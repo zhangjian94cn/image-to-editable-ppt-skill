@@ -316,6 +316,7 @@ def cmd_inspect_evidence(args: argparse.Namespace) -> int:
         ]
         if all(value and Path(str(value)).is_file() for value in required):
             cached["cache_hit"] = True
+            output.write_text(json.dumps(cached, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             _print_json(cached)
             return 0
 
