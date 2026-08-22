@@ -33,6 +33,12 @@ ready result. Keep the evidence and fail clearly.
    `source.png` is already prepared in the canonical authoring coordinate
    space. Read its reported dimensions and use them directly; do not rescale a
    completed manifest to compensate for the chat/image preview size.
+   If `authoring-hints.json` exists, read it as optional candidate metadata.
+   A listed brand asset is not a design instruction: use it only when its
+   identity and appearance match the source, export it through
+   `editppt assets brand --id ...`, and otherwise keep reconstructing from the
+   source. Missing, invalid, or mismatched hints are warnings and never block
+   the page.
 2. Reconcile every evidence hint with the visible source. `inspect evidence`
    composes the independently usable `vision`, `text`, `layout`, and
    `structure` helpers, writes measured size groups, and caches them by source,
@@ -67,6 +73,9 @@ PowerPoint render.
 
 - Never use the full source page, or an almost-full-page crop, as a background
   or covering image.
+- Never let an optional brand-asset hint override source wording, geometry,
+  colors, logo identity, or visual evidence. An empty hint means automatic
+  source-driven reconstruction, not a request to invent a brand treatment.
 - Keep every source-pixel crop tight around one allowed local asset. Do not
   include text, connectors, container borders, or editable structure that is
   also rebuilt; duplicated crop content must be removed after true rendering.

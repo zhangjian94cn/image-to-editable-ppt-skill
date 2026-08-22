@@ -6,6 +6,7 @@ Release notes are generated from this file. Keep changelog entries in English.
 
 ### Improvements
 
+- Treat page-local brand asset hints as optional source-match-only candidates, with automatic source extraction and non-blocking warnings when a hint is absent, invalid, unavailable, or visually mismatched.
 - Add one cached `editppt inspect evidence` entrypoint combining multimodal detail views, visibly degraded Paddle/local text evidence, layout/structure hints, typography size groups, and the font-environment fingerprint.
 - Add semantic typography roles, resolution-scaled defaults, role-specific automatic-shrink warnings, named object layers, deterministic layer diagnostics, and the reusable `add_layered_header` component.
 - Discover and fingerprint fonts by their internal metadata across explicit, user, system, and Microsoft PowerPoint `DFonts` locations; preserve Microsoft YaHei when PowerPoint ships it and record every real fallback.
@@ -26,6 +27,7 @@ Release notes are generated from this file. Keep changelog entries in English.
 
 ### Fixes
 
+- Run the complete pytest suite in CI instead of importing pytest-based modules through incomplete unittest discovery.
 - Make `editppt render` render the exact `page.pptx` through Microsoft PowerPoint instead of refreshing a manifest sketch.
 - Assemble independent `page.pptx` files with relationship-aware Open XML copying in page order, without requiring page manifests.
 - Label Builder previews as drafts and prefer `rsvg-convert` for reliable audited SVG brand-asset previews.

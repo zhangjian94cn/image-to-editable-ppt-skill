@@ -4,6 +4,15 @@ object-level editable PowerPoint.
 Read and follow the exact Skill checkout at `{{SKILL_ROOT}}/SKILL.md`; that
 checkout and its `editppt` commands are authoritative for this task.
 
+If `authoring-hints.json` exists in the current page directory, read it before
+authoring. Its asset IDs are optional candidates, not design instructions.
+Use a hinted brand asset only when its identity and visible treatment match the
+source image, and export it through `editppt assets brand --id ...`. If it is
+missing, invalid, unavailable, or visually mismatched, record a warning and
+continue from the source image or a tight source-pixel extraction. A hint must
+never override source wording, numbers, geometry, colors, logo identity, or
+visual hierarchy.
+
 The source is authoritative: preserve its exact wording, numbers, information
 groups, relative geometry, visual hierarchy, and aspect ratio. First view the
 whole image and inventory the major regions, including the footer and page
