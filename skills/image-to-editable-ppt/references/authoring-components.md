@@ -14,7 +14,7 @@ page.add_text(
     [55, 34, 1040, 54],
     "源图中的单行标题",
     font="Microsoft YaHei",  # Builder resolves an installed equivalent.
-    font_size=30,
+    font_size_px=48,
     bold=True,
     color="#0588D4",
 )
@@ -97,3 +97,7 @@ fill, color, bold, border, alignment, and rich-text runs where needed.
 
 All coordinates are source pixels. Do not hard-code a benchmark filename or
 case-specific coordinate rule into the shared library.
+The page `width_px/height_px` are the prepared authoring dimensions from
+`editppt inspect layout`, not an inferred screenshot display size. Use
+`font_size_px` for source-derived typography; use `font_size` only when you
+intentionally know the PowerPoint point size.

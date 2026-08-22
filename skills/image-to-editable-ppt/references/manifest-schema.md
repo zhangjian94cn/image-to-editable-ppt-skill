@@ -19,13 +19,21 @@ primarily text, shapes, tables, connectors, and compact images.
 Objects may use inches (`left`, `top`, `width`, `height`) or source pixels
 (`box_px: [x, y, width, height]`). Lines use `points_px: [x1, y1, x2, y2]`.
 `z_index` controls the shared object stack. Shape effects default to none.
+For task directories prepared by the Skill, `source.width_px/height_px` must
+equal `editppt inspect layout`'s `size_px`; never substitute the original
+pre-normalization dimensions or the chat preview dimensions.
+
+`font_size` is always PowerPoint points. `font_size_px` is the preferred input
+when reading type size from the source image and is converted to points by the
+Builder. Do not provide both fields. `valign` accepts `top`, `middle`/`mid`, or
+`bottom`.
 
 ## Rich text in one box
 
 ```json
 {
   "box_px": [80, 50, 1300, 70],
-  "font_size": 26,
+  "font_size_px": 42,
   "font": "PingFang SC",
   "wrap": "none",
   "runs": [
@@ -77,6 +85,9 @@ dozens of unrelated rectangles and text boxes.
 
 After `editppt build`, inspect with `editppt render` and `editppt inspect pptx`.
 The manifest draft is not final visual evidence.
+The build JSON also reports font shrink adjustments. Any ratio below 0.75
+usually means the coordinate frame, box geometry, or line grouping is wrong;
+repair that input rather than accepting tiny text.
 
 For page-specific Python authoring, use `editppt.authoring.SlideManifest` and
 the reusable patterns in [authoring-components.md](authoring-components.md).

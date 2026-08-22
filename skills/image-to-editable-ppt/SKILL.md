@@ -27,6 +27,9 @@ ready result. Keep the evidence and fail clearly.
 1. View the whole source and write a short inventory of its major regions
    before authoring. OCR is text and coordinate evidence, never a substitute
    for whole-page observation.
+   `source.png` is already prepared in the canonical authoring coordinate
+   space. Read its reported dimensions and use them directly; do not rescale a
+   completed manifest to compensate for the chat/image preview size.
 2. Use `editppt inspect text|layout|structure` when measured evidence helps.
    Reconcile every hint with the visible source.
 3. Rebuild titles, body copy, numbers, tables, timelines, containers,
@@ -57,6 +60,8 @@ PowerPoint render.
   also rebuilt; duplicated crop content must be removed after true rendering.
 - Keep source single-line titles on one line. Measure them; do not rely on
   automatic wrapping.
+- `font_size` is PowerPoint points. Prefer `font_size_px` when estimating type
+  from the source image; the Builder converts it using the page geometry.
 - Keep one sentence or rich-text phrase in one text box unless the source
   visibly separates it. Use runs for inline emphasis.
 - Use consistent font, size, weight, and color for the same visual level.
@@ -68,6 +73,10 @@ PowerPoint render.
   writing an equivalent script.
 - Treat the installed Skill as read-only during a page task. Do not inspect or
   patch its runtime to work around a failure.
+- Read only the current page directory and this Skill checkout. Never inspect
+  parent/sibling page directories, another benchmark result, or another
+  task's manifest as an authoring shortcut. Do not consult Codex memory or
+  earlier task history; only the current visual source is authoritative.
 - Only `editppt render` may control Microsoft PowerPoint. Never call `open`,
   `osascript`, `cua-driver`, process inspection/termination, or application
   activation/quit commands from the page task. A renderer failure is a failed

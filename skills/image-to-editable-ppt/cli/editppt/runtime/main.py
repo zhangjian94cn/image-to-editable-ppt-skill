@@ -14,6 +14,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# ``main.py`` remains directly executable for diagnostics and tests.  Make the
+# package root discoverable before importing runtime modules that share public
+# helpers from ``editppt``.
+CLI_ROOT = Path(__file__).resolve().parents[2]
+if str(CLI_ROOT) not in sys.path:
+    sys.path.insert(0, str(CLI_ROOT))
+
 from _input_normalization import normalize_inputs
 from asset_tools import brand_asset, crop, list_brand_assets, separate_flat_background
 from formula_renderer import FormulaRenderError, render_latex_asset
@@ -209,6 +216,8 @@ def cmd_build(args: argparse.Namespace) -> int:
         "build_report": str(build_report),
         "font_substitutions": report.get("font_substitutions", []),
         "text_adjustments": report.get("text_adjustments", []),
+        "severe_text_adjustments": report.get("severe_text_adjustments", []),
+        "warnings": report.get("warnings", []),
         "draft_preview": str(page / draft_preview) if draft_preview else "",
         "warning": "draft preview is not a Microsoft PowerPoint render" if draft_preview else "",
     })

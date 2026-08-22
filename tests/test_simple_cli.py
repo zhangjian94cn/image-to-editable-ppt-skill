@@ -80,6 +80,37 @@ class SimpleCliTest(unittest.TestCase):
             assert "validation" not in json.dumps(payload)
             assert payload["pages"][0]["result"].endswith("result.json")
 
+    def test_prepare_uses_stable_authoring_space_and_crop_restores_original_pixels(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "wide.png"
+            image = Image.new("RGB", (4096, 2304), "white")
+            for x in range(2000, 2400):
+                for y in range(800, 1200):
+                    image.putpixel((x, y), (0, 133, 208))
+            image.save(source)
+            run_dir = root / "run"
+
+            prepared = run_cli("prepare", source, "--job-dir", run_dir)
+            self.assertEqual(0, prepared.returncode, prepared.stderr)
+            page = run_dir / "pages/page_001"
+            with Image.open(page / "source.png") as authoring:
+                self.assertEqual((2048, 1152), authoring.size)
+            mapping = json.loads((page / ".editppt/source-map.json").read_text())
+            self.assertEqual([4096, 2304], mapping["original_size_px"])
+
+            cropped = page / "asset.png"
+            result = run_cli(
+                "assets", "crop", "--input", page / "source.png", "--out", cropped,
+                "--left", 1000, "--top", 400, "--right", 1200, "--bottom", 600,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual([1000, 400, 1200, 600], payload["authoring_box_px"])
+            self.assertEqual([2000, 800, 2400, 1200], payload["box_px"])
+            with Image.open(cropped) as asset:
+                self.assertEqual((400, 400), asset.size)
+
     def test_build_draft_preview_and_inspect_native_table(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

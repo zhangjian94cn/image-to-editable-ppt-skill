@@ -10,6 +10,13 @@ whole image and inventory the major regions. You may use the Skill's OCR,
 layout, structure, source-pixel asset, Builder, text-fit, PowerPoint render,
 PPTX inspection, and comparison tools.
 
+`source.png` has already been normalized to the canonical authoring coordinate
+space used by Codex vision. Run `editppt inspect layout .`, use the returned
+`size_px` directly for the manifest, and keep every geometry/crop coordinate in
+that space. Never bulk-rescale a completed manifest based on the chat preview
+or inferred display size. `editppt assets crop` automatically maps those
+coordinates back to the retained original pixels when a source map is present.
+
 Use native text, rich-text runs, shapes, tables, connectors, and ordinary chart
 objects wherever practical. Compact independent image objects are allowed for
 logos, photos, screenshots, maps, and genuinely complex illustrations. Never
@@ -25,6 +32,11 @@ duplicate font fitting, table, connector, or OOXML packaging logic. For a
 source single-line title, use one text box with `wrap: none`; let the Builder
 resolve the installed font and fit it, and use `editppt text-fit` when the box
 remains tight.
+Use `font_size_px` when estimating a size from the source image; plain
+`font_size` is expressed in PowerPoint points. After each build, inspect the
+reported text adjustments. A shrink ratio below 0.75 is a layout defect to fix
+by correcting the coordinate space, box size, line grouping, or requested
+font—not a successful automatic fit.
 
 Generate `page.pptx`, run `editppt render` on that exact file, and view the
 resulting `preview.png`. Repair visible content omissions, overlaps, overflow,
@@ -39,6 +51,10 @@ Microsoft PowerPoint process lifecycle: never call `open`, `osascript`,
 control or diagnose PowerPoint. If the curated renderer fails, preserve its
 evidence, explain the failure in your final message, and do not write a ready
 result.
+
+Work only in the current page directory plus the exact Skill checkout. Do not
+search or read parent directories, sibling benchmark pages, earlier manifests,
+another task's output, Codex memory, or prior task history.
 
 When finished, write:
 

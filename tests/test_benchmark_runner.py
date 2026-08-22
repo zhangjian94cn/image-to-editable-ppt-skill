@@ -73,6 +73,44 @@ def test_direct_powerpoint_automation_is_rejected():
     assert any(value["category"] == "execution" for value in issues)
 
 
+def test_parent_or_sibling_page_scan_is_reported():
+    metrics = {
+        "codex_powerpoint_rendered": True,
+        "text_coverage": 1.0,
+        "max_picture_coverage": 0.1,
+        "out_of_bounds_count": 0,
+        "coarse_rgb_loss": 0.0,
+        "content_ink_loss": 0.0,
+    }
+    root = Path("/tmp/snapshot/pages")
+    page = root / "case-p001"
+    verdict, issues = _issues(
+        metrics,
+        commands=[CommandEvidence("find .. -name manifest.json", 0)],
+        page_dir=page,
+        pages_root=root,
+    )
+    assert verdict == "needs_work"
+    assert any("单页独立性" in value["message"] for value in issues)
+
+
+def test_historical_memory_read_is_reported():
+    metrics = {
+        "codex_powerpoint_rendered": True,
+        "text_coverage": 1.0,
+        "max_picture_coverage": 0.1,
+        "out_of_bounds_count": 0,
+        "coarse_rgb_loss": 0.0,
+        "content_ink_loss": 0.0,
+    }
+    verdict, issues = _issues(
+        metrics,
+        commands=[CommandEvidence("rg image-to-ppt /Users/test/.codex/memories/MEMORY.md", 0)],
+    )
+    assert verdict == "needs_work"
+    assert any("历史 memory" in value["message"] for value in issues)
+
+
 def test_snapshot_root_contract_is_review_first():
     assert ROOT_FILES == {"source.png", "candidate.pptx", "candidate.png", "report.md", "artifacts"}
 

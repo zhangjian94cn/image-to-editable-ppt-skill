@@ -12,6 +12,8 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
+from editppt.source_space import map_authoring_box_to_original, read_source_map
+
 
 def _write(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -19,6 +21,14 @@ def _write(path: Path, value: dict[str, Any]) -> None:
 
 
 def crop(source: Path, out: Path, box: tuple[int, int, int, int], pad: int = 0) -> dict[str, Any]:
+    source = source.resolve()
+    requested_source = source
+    authoring_box = list(box)
+    mapping = read_source_map(source)
+    if mapping:
+        source = Path(mapping["original_path"]).resolve()
+        box = map_authoring_box_to_original(box, mapping, pad=pad)
+        pad = 0
     with Image.open(source) as image:
         width, height = image.size
         left, top, right, bottom = box
@@ -33,7 +43,7 @@ def crop(source: Path, out: Path, box: tuple[int, int, int, int], pad: int = 0) 
     coverage = ((right - left) * (bottom - top)) / max(1, width * height)
     result = {
         "status": "ready",
-        "operation": "source-pixel-crop",
+        "operation": "original-source-pixel-crop" if mapping else "source-pixel-crop",
         "source": str(source.resolve()),
         "output": str(out.resolve()),
         "source_size_px": [width, height],
@@ -41,6 +51,13 @@ def crop(source: Path, out: Path, box: tuple[int, int, int, int], pad: int = 0) 
         "coverage": round(coverage, 6),
         "near_full_page_risk": coverage >= 0.8,
     }
+    if mapping:
+        result.update({
+            "authoring_source": str(requested_source),
+            "authoring_size_px": mapping["authoring_size_px"],
+            "authoring_box_px": authoring_box,
+            "scale_to_original": mapping["scale_to_original"],
+        })
     _write(out.with_suffix(out.suffix + ".json"), result)
     return result
 

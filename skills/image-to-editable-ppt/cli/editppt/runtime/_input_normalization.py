@@ -12,6 +12,8 @@ from xml.etree import ElementTree as ET
 
 from PIL import Image
 
+from editppt.source_space import prepare_authoring_source
+
 
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 PPT_EXTS = {".ppt", ".pptx"}
@@ -85,11 +87,8 @@ def copy_input(src, input_dir):
 
 
 def save_image_page(src, page_dir):
-    page_dir.mkdir(parents=True, exist_ok=True)
-    out = page_dir / "source.png"
-    with Image.open(src) as image:
-        image.convert("RGB").save(out)
-    return out
+    prepare_authoring_source(src, page_dir)
+    return page_dir / "source.png"
 
 
 def render_pdf_pages(pdf_path, pages_dir, dpi):
@@ -104,6 +103,7 @@ def render_pdf_pages(pdf_path, pages_dir, dpi):
         pix = page.get_pixmap(matrix=matrix, alpha=False)
         out = page_dir / "source.png"
         pix.save(out)
+        prepare_authoring_source(out, page_dir)
         outputs.append(out)
     return outputs
 
@@ -245,6 +245,7 @@ def extract_image_based_pptx_pages(pptx_path, pages_dir):
             out = page_dir / "source.png"
             with Image.open(io.BytesIO(z.read(image_part))) as image:
                 image.convert("RGB").save(out)
+            prepare_authoring_source(out, page_dir)
             outputs.append(out)
     return outputs
 

@@ -54,8 +54,8 @@ class SlideManifest:
     def add_shape(
         self,
         box_px: Box,
-        *,
         kind: str = "rect",
+        *,
         fill: str = "none",
         stroke: str = "none",
         stroke_width: float = 1,
@@ -87,12 +87,18 @@ class SlideManifest:
         *,
         color: str = "#4472C4",
         width: float = 1.25,
+        stroke: str | None = None,
+        stroke_width: float | None = None,
         dash: str = "",
         start_arrow: str = "none",
         end_arrow: str = "triangle",
         preset: str = "line",
         z_index: float = 140,
     ) -> dict[str, Any]:
+        if stroke is not None:
+            color = stroke
+        if stroke_width is not None:
+            width = float(stroke_width)
         x1, y1 = _point(start_px)
         x2, y2 = _point(end_px)
         item = {
@@ -113,12 +119,13 @@ class SlideManifest:
     def add_text(
         self,
         box_px: Box,
-        text: str = "",
+        text: str | None = None,
         *,
         runs: Iterable[dict[str, Any]] | None = None,
         paragraphs: Iterable[dict[str, Any] | str] | None = None,
         font: str = "PingFang SC",
-        font_size: float = 18,
+        font_size: float | None = None,
+        font_size_px: float | None = None,
         color: str = "#111111",
         bold: bool = False,
         align: str = "left",
@@ -128,9 +135,15 @@ class SlideManifest:
         z_index: float = 300,
         **extra: Any,
     ) -> dict[str, Any]:
-        supplied = int(bool(text)) + int(runs is not None) + int(paragraphs is not None)
+        supplied = int(text is not None) + int(runs is not None) + int(paragraphs is not None)
         if supplied != 1:
             raise ValueError("provide exactly one of text, runs, or paragraphs")
+        if font_size is not None and font_size_px is not None:
+            raise ValueError("provide font_size in points or font_size_px, not both")
+        if font_size_px is not None:
+            font_size = float(font_size_px) * self.slide_height * 72.0 / self.height_px
+        if font_size is None:
+            font_size = 18.0
         item: dict[str, Any] = {
             "box_px": _box(box_px),
             "font": font,
@@ -180,7 +193,8 @@ class SlideManifest:
         column_widths: Sequence[float] | None = None,
         row_heights: Sequence[float] | None = None,
         font: str = "PingFang SC",
-        font_size: float = 12,
+        font_size: float | None = None,
+        font_size_px: float | None = None,
         header_fill: str = "#0A65B7",
         header_color: str = "#FFFFFF",
         fill: str = "#FFFFFF",
@@ -191,6 +205,12 @@ class SlideManifest:
     ) -> dict[str, Any]:
         if not rows or not max((len(row) for row in rows), default=0):
             raise ValueError("table rows must be non-empty")
+        if font_size is not None and font_size_px is not None:
+            raise ValueError("provide font_size in points or font_size_px, not both")
+        if font_size_px is not None:
+            font_size = float(font_size_px) * self.slide_height * 72.0 / self.height_px
+        if font_size is None:
+            font_size = 12.0
         item: dict[str, Any] = {
             "box_px": _box(box_px),
             "rows": [list(row) for row in rows],

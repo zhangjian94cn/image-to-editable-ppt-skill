@@ -26,6 +26,8 @@ from PIL import Image, ImageChops
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
+from editppt.source_space import prepare_authoring_source
+
 
 ROOT_FILES = {"source.png", "candidate.pptx", "candidate.png", "report.md", "artifacts"}
 DIRECT_POWERPOINT_PATTERN = re.compile(
@@ -33,6 +35,8 @@ DIRECT_POWERPOINT_PATTERN = re.compile(
     r"(?:powerpoint|microsoft powerpoint).{0,240}(?:osascript|cua-driver|pgrep|pkill|killall|\bopen\b)",
     re.IGNORECASE | re.DOTALL,
 )
+PARENT_SCAN_PATTERN = re.compile(r"\b(?:find|rg|grep)\b[^\n]{0,240}(?:\.\./|\s\.\.(?:\s|$))")
+EXTERNAL_CONTEXT_PATTERN = re.compile(r"(?:/|\\)\.codex/(?:memories|memory)|\bMEMORY\.md\b", re.IGNORECASE)
 
 
 class BenchmarkError(RuntimeError):
@@ -481,6 +485,9 @@ def _issues(
     metrics: dict[str, Any],
     render_error: str = "",
     commands: Iterable[CommandEvidence] = (),
+    *,
+    page_dir: Path | None = None,
+    pages_root: Path | None = None,
 ) -> tuple[str, list[dict[str, str]]]:
     issues: list[dict[str, str]] = []
     if render_error:
@@ -498,6 +505,26 @@ def _issues(
             "severity": "P0",
             "category": "execution",
             "message": "页面 Codex 绕过 editppt render 直接控制或检查了 PowerPoint",
+        })
+    if page_dir is not None and pages_root is not None:
+        current = str(page_dir.resolve())
+        root = str(pages_root.resolve())
+        cross_page = [
+            value.command for value in commands
+            if PARENT_SCAN_PATTERN.search(value.command)
+            or (root in value.command and current not in value.command)
+        ]
+        if cross_page:
+            issues.append({
+                "severity": "P1",
+                "category": "execution",
+                "message": "页面 Codex 读取或扫描了父目录/其他页面证据，破坏单页独立性",
+            })
+    if any(EXTERNAL_CONTEXT_PATTERN.search(value.command) for value in commands):
+        issues.append({
+            "severity": "P1",
+            "category": "execution",
+            "message": "页面 Codex 读取了历史 memory，而不是仅依据当前源图和固定 Skill",
         })
     coverage = metrics.get("text_coverage")
     if isinstance(coverage, (int, float)) and coverage < 0.7:
@@ -617,7 +644,7 @@ def _run_page(
     render_dir = artifacts / "render"
     compare_dir = artifacts / "compare"
     work.mkdir(parents=True, exist_ok=False)
-    shutil.copy2(case.source, work / "source.png")
+    prepare_authoring_source(case.source, work)
     shutil.copy2(case.source, page_dir / "source.png")
     started = time.monotonic()
     outcome = PageOutcome(case.page_id)
@@ -661,7 +688,11 @@ def _run_page(
             metrics.update(_visual_metrics(page_dir / "source.png", page_dir / "candidate.png", compare_dir))
         outcome.metrics.update(metrics)
         outcome.verdict, outcome.issues = _issues(
-            outcome.metrics, render_error, outcome.commands
+            outcome.metrics,
+            render_error,
+            outcome.commands,
+            page_dir=page_dir,
+            pages_root=run_dir / "pages",
         )
         if render_error:
             outcome.error = render_error

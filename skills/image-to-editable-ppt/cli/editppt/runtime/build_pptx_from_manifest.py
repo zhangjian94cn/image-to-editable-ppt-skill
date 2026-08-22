@@ -36,6 +36,8 @@ TEXT_VERTICAL_ALIGNMENTS = {
     "top": ("t", "top"),
     "middle": ("ctr", "middle"),
     "center": ("ctr", "middle"),
+    "mid": ("ctr", "middle"),
+    "centre": ("ctr", "middle"),
     "bottom": ("b", "bottom"),
     "t": ("t", "top"),
     "ctr": ("ctr", "middle"),
@@ -182,6 +184,43 @@ def normalize_position_item(manifest, item):
     if item.get("source_corner_radius_px") is not None and "radius" not in item:
         radius = float(item.get("source_corner_radius_px") or 0)
         item["radius"] = px_to_inches(manifest, 0, 0, radius, radius)["width"]
+    return item
+
+
+def normalize_font_size_item(manifest, item):
+    """Resolve optional source-pixel font sizes to PowerPoint points."""
+
+    item = dict(item)
+    source = source_size_px(manifest)
+    if source:
+        _source_width, source_height = source
+        content_box = content_box_for_manifest(manifest)
+
+        def resolve(record):
+            if not isinstance(record, dict) or record.get("font_size_px") is None:
+                return
+            if record.get("font_size") is not None:
+                raise ValueError("provide font_size or font_size_px, not both")
+            record["font_size"] = round(
+                float(record.pop("font_size_px")) * float(content_box["height"]) * 72.0 / source_height,
+                3,
+            )
+
+        resolve(item)
+        for run in item.get("runs", []):
+            resolve(run)
+        for paragraph in item.get("paragraphs", []):
+            if isinstance(paragraph, dict):
+                resolve(paragraph)
+                for run in paragraph.get("runs", []):
+                    resolve(run)
+        for row in item.get("rows", []):
+            for cell in row:
+                if not isinstance(cell, dict):
+                    continue
+                resolve(cell)
+                for run in cell.get("runs", []):
+                    resolve(run)
     return item
 
 
@@ -368,13 +407,14 @@ def normalize_manifest(manifest):
     text_boxes = list(normalized.get("text_boxes", []))
     normalized["text_boxes"] = []
     for item in text_boxes:
-        prepared = resolve_text_fonts(normalize_position_item(normalized, item))
+        prepared = resolve_text_fonts(normalize_position_item(normalized, normalize_font_size_item(normalized, item)))
         normalized["text_boxes"].append(fit_text_item(prepared, normalized))
     for key in ("images", "shapes"):
         normalized[key] = [normalize_position_item(normalized, item) for item in normalized.get(key, [])]
+    tables = list(normalized.get("tables", []))
     normalized["tables"] = []
-    for item in manifest.get("tables", []):
-        prepared = resolve_text_fonts(normalize_position_item(normalized, item))
+    for item in tables:
+        prepared = resolve_text_fonts(normalize_position_item(normalized, normalize_font_size_item(normalized, item)))
         for row in prepared.get("rows", []):
             for cell in row:
                 if isinstance(cell, dict):
@@ -683,6 +723,12 @@ def round_rect_adjustment(item):
     box_px = item.get("box_px")
     if item.get("source_corner_radius_px") is not None and box_px and len(box_px) == 4:
         radius = float(item.get("source_corner_radius_px") or 0)
+        min_dim = max(1.0, min(float(box_px[2]), float(box_px[3])))
+    elif item.get("radius") is not None and box_px and len(box_px) == 4:
+        # A manifest authored in source pixels naturally expresses its corner
+        # radius in the same coordinate space.  Treating this value as inches
+        # turns a small radius into a capsule or arc on large containers.
+        radius = float(item.get("radius") or 0)
         min_dim = max(1.0, min(float(box_px[2]), float(box_px[3])))
     elif item.get("radius") is not None:
         radius = float(item.get("radius") or 0)
@@ -1011,6 +1057,9 @@ def build_report(normalized, out_path):
                 "effective_pt": effective,
                 "shrink_ratio": round(effective / max(requested, 0.01), 4),
             })
+    severe_adjustments = [
+        value for value in text_adjustments if float(value.get("shrink_ratio", 1)) < 0.75
+    ]
     return {
         "schema_version": 1,
         "output_pptx": str(Path(out_path).resolve()),
@@ -1022,6 +1071,10 @@ def build_report(normalized, out_path):
         },
         "font_substitutions": substitutions,
         "text_adjustments": text_adjustments,
+        "severe_text_adjustments": severe_adjustments,
+        "warnings": ([
+            f"{len(severe_adjustments)} text boxes were shrunk below 75% of requested size"
+        ] if severe_adjustments else []),
     }
 
 

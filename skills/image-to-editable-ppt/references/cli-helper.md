@@ -30,6 +30,10 @@ editppt inspect pptx /page --input page.pptx
 - `pptx`: native object, text, table, connector, picture-coverage, and boundary
   readback.
 
+`layout`'s `size_px` is the canonical authoring space. Use it verbatim. Do not
+derive coordinates from a resized chat preview and do not later multiply or
+divide a whole manifest to chase a display scale.
+
 ## Assets
 
 ```bash
@@ -46,6 +50,9 @@ editppt assets brand --id cmcc-logo-horizontal-blue-white --out assets/cmcc.svg
 removes only an edge-connected flat background, preserves foreground pixels,
 and reports put-back error. Use these for compact independent assets, never as
 a page-raster shortcut.
+When `source.png` has a Skill source map, `crop` accepts canonical authoring
+coordinates but reads the retained original image, so the resulting asset keeps
+the original pixels. Its JSON records both authoring and original boxes.
 
 ## Build and text fitting
 
@@ -59,6 +66,9 @@ editppt text-fit --text '单行标题' --width-px 900 --height-px 80 --single-li
 explicitly not a PowerPoint render. `text-fit` measures installed fonts and
 returns source-pixel measurements; convert pixels to points using the actual
 source-to-slide scale.
+The manifest may instead use `font_size_px`, which performs this conversion
+deterministically. Review `text_adjustments`; shrink ratios below 0.75 require
+an authoring correction before declaring the page ready.
 
 ## True render and compare
 
