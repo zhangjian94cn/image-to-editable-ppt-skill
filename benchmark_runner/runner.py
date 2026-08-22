@@ -991,6 +991,9 @@ def _run_page(
     }
     _write_json(artifacts / "telemetry.json", telemetry)
     _report(page_dir, case, outcome, run_meta, render_report, changed, render_elapsed)
+    macos_metadata = page_dir / ".DS_Store"
+    if macos_metadata.is_file():
+        macos_metadata.unlink()
     unexpected = {value.name for value in page_dir.iterdir()} - ROOT_FILES
     if unexpected:
         raise BenchmarkError(f"snapshot root contains process files: {sorted(unexpected)}")

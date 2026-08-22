@@ -16,6 +16,7 @@ Release notes are generated from this file. Keep changelog entries in English.
 - Diagnose overlapping text boxes that duplicate the same visible prefix, and accept common shape/chart call aliases so Codex can use shared components without trial-and-error authoring failures.
 - Diagnose unmeasured text sizes outside each semantic role's resolution-scaled source-pixel range, even when every object in that role is consistently wrong.
 - Persist evidence-cache hits in the page index so benchmark telemetry reports actual reuse instead of the original cold-build state.
+- Remove macOS `.DS_Store` metadata from snapshot roots before enforcing the four-file review contract; all other unexpected process files still fail closed.
 - Add a snapshot-v2 benchmark runner with frozen baseline, targeted 3-page, core 10-page, and full 17-page suites, per-page evidence reports, command telemetry, and PowerPoint-authoritative candidate renders.
 - Define reconstruction fidelity, single-line title, rich-text run, native table, source-bound asset, and fail-closed PowerPoint render rules in one canonical page prompt and Skill entry.
 - Replace the legacy controller scripts with deterministic `inspect`, `assets`, `build`, `text-fit`, `render`, `compare`, `assemble`, `formula`, and `doctor` tools.
