@@ -108,6 +108,9 @@ Also resolve every `role_size_deviation` whose `measured_override` is false:
 either use the common role size, choose the correct semantic role, or mark the
 specific size as measured only when the source image or evidence actually
 supports it. Do not silence the diagnostic with an invented measurement.
+Resolve every unmeasured `role_range_deviation` too. Consistency is not enough
+when an entire role is uniformly too small or too large; use the role's scaled
+source-pixel range unless genuine source evidence supports an exception.
 Fix every `.editppt/layer-report.json` `duplicate_text_overlaps` entry: use one text
 box with rich-text runs instead of drawing a colored label over a second copy
 of the same label inside the full sentence.

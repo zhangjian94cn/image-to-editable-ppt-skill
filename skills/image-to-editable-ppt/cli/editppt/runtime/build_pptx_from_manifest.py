@@ -1244,6 +1244,7 @@ def build_report(normalized, out_path):
             role_shrink_warnings.append(value)
 
     role_size_deviations = []
+    role_range_deviations = []
     by_role: dict[str, list[tuple[int, dict]]] = {}
     for index, item in enumerate(normalized.get("text_boxes", []), start=1):
         role = str(item.get("_text_role") or "")
@@ -1270,6 +1271,25 @@ def build_report(normalized, out_path):
                     "requested_pt": requested,
                     "role_median_requested_pt": median,
                     "deviation_ratio": round(deviation, 4),
+                    "measured_override": is_measured_text(item),
+                })
+        source = source_size_px(normalized)
+        source_height = float(source[1]) if source else 900.0
+        slide_height = float((normalized.get("slide") or {}).get("height") or 7.5)
+        role_min = float(ROLE_SPECS[role]["min_px"]) * source_height / 900.0
+        role_max = float(ROLE_SPECS[role]["max_px"]) * source_height / 900.0
+        for index, item in values:
+            requested_pt = float(item.get("_requested_font_size", item.get("font_size", 0)))
+            requested_px = requested_pt * source_height / max(slide_height * 72.0, 0.01)
+            if requested_px < role_min or requested_px > role_max:
+                role_range_deviations.append({
+                    "text_box": index,
+                    "text_role": role,
+                    "text_excerpt": " ".join(iter_text_lines(item))[:100],
+                    "requested_pt": round(requested_pt, 3),
+                    "requested_px": round(requested_px, 2),
+                    "role_min_px": round(role_min, 2),
+                    "role_max_px": round(role_max, 2),
                     "measured_override": is_measured_text(item),
                 })
 
@@ -1330,6 +1350,9 @@ def build_report(normalized, out_path):
     unresolved_role_deviations = [value for value in role_size_deviations if not value["measured_override"]]
     if unresolved_role_deviations:
         warnings.append(f"{len(unresolved_role_deviations)} text boxes differ from their role median by more than 5% without measured evidence")
+    unresolved_role_ranges = [value for value in role_range_deviations if not value["measured_override"]]
+    if unresolved_role_ranges:
+        warnings.append(f"{len(unresolved_role_ranges)} text boxes fall outside their semantic role size range without measured evidence")
     if layer_conflicts:
         warnings.append(f"{len(layer_conflicts)} objects declare both layer and a conflicting z_index; z_index won")
     if unlayered_overlaps:
@@ -1353,6 +1376,7 @@ def build_report(normalized, out_path):
         "typography_adjustments": typography_adjustments,
         "role_shrink_warnings": role_shrink_warnings,
         "role_size_deviations": role_size_deviations,
+        "role_range_deviations": role_range_deviations,
         "layer_report": {
             "schema_version": 1,
             "named_layer_defaults": LAYER_Z,

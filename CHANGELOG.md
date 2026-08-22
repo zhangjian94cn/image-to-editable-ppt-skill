@@ -14,6 +14,7 @@ Release notes are generated from this file. Keep changelog entries in English.
 - Clarify that transcript lines are not authoring-object boundaries, measured size overrides must be labeled, and `slide_title` is reserved for the primary page title.
 - Add deterministic native-shape bar and line chart components and require final candidates to resolve unexplained role-size deviations and refresh comparisons after any rebuild.
 - Diagnose overlapping text boxes that duplicate the same visible prefix, and accept common shape/chart call aliases so Codex can use shared components without trial-and-error authoring failures.
+- Diagnose unmeasured text sizes outside each semantic role's resolution-scaled source-pixel range, even when every object in that role is consistently wrong.
 - Add a snapshot-v2 benchmark runner with frozen baseline, targeted 3-page, core 10-page, and full 17-page suites, per-page evidence reports, command telemetry, and PowerPoint-authoritative candidate renders.
 - Define reconstruction fidelity, single-line title, rich-text run, native table, source-bound asset, and fail-closed PowerPoint render rules in one canonical page prompt and Skill entry.
 - Replace the legacy controller scripts with deterministic `inspect`, `assets`, `build`, `text-fit`, `render`, `compare`, `assemble`, `formula`, and `doctor` tools.

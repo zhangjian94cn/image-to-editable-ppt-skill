@@ -655,6 +655,10 @@ def _skill_diagnostics(work: Path) -> dict[str, Any]:
         value for value in build.get("role_size_deviations", [])
         if isinstance(value, dict) and not value.get("measured_override")
     ]
+    role_range_deviations = [
+        value for value in build.get("role_range_deviations", [])
+        if isinstance(value, dict) and not value.get("measured_override")
+    ]
     max_role_deviation = max(
         (float(value.get("deviation_ratio") or 0) for value in role_deviations),
         default=0.0,
@@ -671,6 +675,7 @@ def _skill_diagnostics(work: Path) -> dict[str, Any]:
         "typography_adjustment_count": len(build.get("typography_adjustments") or []),
         "role_shrink_warning_count": len(build.get("role_shrink_warnings") or []),
         "role_size_deviation_count": len(role_deviations),
+        "role_range_deviation_count": len(role_range_deviations),
         "max_role_size_deviation_ratio": round(max_role_deviation, 4),
         "layer_conflict_count": len(layers.get("conflicts") or []),
         "unlayered_overlap_count": len(layers.get("unlayered_overlaps") or []),
@@ -761,6 +766,12 @@ def _issues(
             "category": "font",
             "message": f"{metrics['role_size_deviation_count']} 个同角色文字对象字号离散超过 5%",
         })
+    if int(metrics.get("role_range_deviation_count") or 0):
+        issues.append({
+            "severity": "P1",
+            "category": "font",
+            "message": f"{metrics['role_range_deviation_count']} 个文字对象超出其语义角色字号范围且无测量依据",
+        })
     if int(metrics.get("layer_conflict_count") or 0) or int(metrics.get("unlayered_overlap_count") or 0):
         issues.append({
             "severity": "P1",
@@ -832,7 +843,7 @@ def _report(
         "coarse_rgb_loss", "content_ink_loss", "out_of_bounds_count",
         "codex_powerpoint_rendered",
         "font_substitution_count", "powerpoint_dfonts_resolution_count",
-        "role_shrink_warning_count", "role_size_deviation_count",
+        "role_shrink_warning_count", "role_size_deviation_count", "role_range_deviation_count",
         "max_role_size_deviation_ratio", "layer_conflict_count",
         "unlayered_overlap_count", "duplicate_text_overlap_count", "evidence_cache_hit", "ocr_status", "ocr_provider",
     ):

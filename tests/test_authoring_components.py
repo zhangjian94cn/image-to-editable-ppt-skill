@@ -298,6 +298,29 @@ def test_measured_same_role_size_override_is_auditable_not_a_warning():
         assert all("role median" not in warning for warning in payload["warnings"])
 
 
+def test_role_range_diagnostic_catches_uniformly_too_small_unmeasured_text():
+    with tempfile.TemporaryDirectory() as temporary:
+        page = Path(temporary)
+        Image.new("RGB", (1600, 900), "white").save(page / "source.png")
+        value = SlideManifest(1600, 900)
+        value.add_text([20, 20, 300, 30], "标签一", font_size_px=9, text_role="caption")
+        value.add_text([340, 20, 300, 30], "标签二", font_size_px=9, text_role="caption")
+        value.add_text(
+            [660, 20, 300, 30], "源图实测小标签", font_size_px=9,
+            text_role="caption", font_size_source="measured",
+        )
+        value.write(page / "manifest.json")
+
+        built = run_cli("build", page)
+
+        assert built.returncode == 0, built.stderr
+        payload = json.loads(built.stdout)
+        report = json.loads(Path(payload["build_report"]).read_text())
+        assert len(report["role_range_deviations"]) == 3
+        assert sum(not item["measured_override"] for item in report["role_range_deviations"]) == 2
+        assert any("semantic role size range" in warning for warning in payload["warnings"])
+
+
 def test_builder_accepts_common_aliases_and_source_pixel_font_sizes():
     with tempfile.TemporaryDirectory() as temporary:
         page = Path(temporary)
