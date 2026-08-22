@@ -26,6 +26,13 @@ from PIL import Image, ImageChops
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
+# The benchmark is intentionally runnable from a clean checkout without first
+# installing the Skill package into the caller's Python environment.
+CHECKOUT_ROOT = Path(__file__).resolve().parents[1]
+CLI_ROOT = CHECKOUT_ROOT / "skills/image-to-editable-ppt/cli"
+if str(CLI_ROOT) not in sys.path:
+    sys.path.insert(0, str(CLI_ROOT))
+
 from editppt.source_space import prepare_authoring_source
 
 
