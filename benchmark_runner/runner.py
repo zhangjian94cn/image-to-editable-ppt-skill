@@ -384,6 +384,54 @@ def _box_overlap(first: Any, second: Any) -> float:
     return overlap_width * overlap_height / (width * height)
 
 
+def _box_union_overlap(first: Any, seconds: list[Any]) -> float:
+    """Return the fraction of ``first`` covered by the union of ``seconds``."""
+
+    if not isinstance(first, list) or len(first) != 4:
+        return 0.0
+    left, top, width, height = [float(value) for value in first]
+    if width <= 0 or height <= 0:
+        return 0.0
+    right = left + width
+    bottom = top + height
+    clipped: list[tuple[float, float, float, float]] = []
+    for second in seconds:
+        if not isinstance(second, list) or len(second) != 4:
+            continue
+        other_left, other_top, other_width, other_height = [float(value) for value in second]
+        clipped_left = max(left, other_left)
+        clipped_top = max(top, other_top)
+        clipped_right = min(right, other_left + other_width)
+        clipped_bottom = min(bottom, other_top + other_height)
+        if clipped_left < clipped_right and clipped_top < clipped_bottom:
+            clipped.append((clipped_left, clipped_top, clipped_right, clipped_bottom))
+    if not clipped:
+        return 0.0
+
+    x_edges = sorted({edge for rectangle in clipped for edge in (rectangle[0], rectangle[2])})
+    area = 0.0
+    for x_start, x_end in zip(x_edges, x_edges[1:]):
+        if x_end <= x_start:
+            continue
+        intervals = sorted(
+            (rectangle[1], rectangle[3])
+            for rectangle in clipped
+            if rectangle[0] < x_end and rectangle[2] > x_start
+        )
+        covered_height = 0.0
+        if intervals:
+            current_top, current_bottom = intervals[0]
+            for interval_top, interval_bottom in intervals[1:]:
+                if interval_top <= current_bottom:
+                    current_bottom = max(current_bottom, interval_bottom)
+                else:
+                    covered_height += current_bottom - current_top
+                    current_top, current_bottom = interval_top, interval_bottom
+            covered_height += current_bottom - current_top
+        area += (x_end - x_start) * covered_height
+    return area / (width * height)
+
+
 def _expected_text_evidence(expected: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     """Select rendered text, excluding placeholders and source objects hidden by screenshots."""
 
@@ -405,14 +453,24 @@ def _expected_text_evidence(expected: dict[str, Any]) -> tuple[list[dict[str, An
                 excluded.append({"text": value, "reason": "dynamic_placeholder"})
             elif compact:
                 visible_segments.append(value)
-        hidden_by_picture = any(
-            isinstance(later, dict)
-            and later.get("kind") == "picture"
-            and _box_overlap(item.get("box_px"), later.get("box_px")) >= 0.95
+        later_picture_boxes = [
+            later.get("box_px")
             for later in objects[index + 1 :]
+            if isinstance(later, dict) and later.get("kind") == "picture"
+        ]
+        individual_overlap = max(
+            (_box_overlap(item.get("box_px"), box) for box in later_picture_boxes),
+            default=0.0,
         )
-        if hidden_by_picture:
+        union_overlap = _box_union_overlap(item.get("box_px"), later_picture_boxes)
+        if individual_overlap >= 0.95:
             excluded.extend({"text": value, "reason": "occluded_by_later_picture"} for value in visible_segments)
+            continue
+        if union_overlap >= 0.25:
+            excluded.extend(
+                {"text": value, "reason": "partially_occluded_by_later_picture"}
+                for value in visible_segments
+            )
             continue
         if visible_segments:
             values.append({"text": str(item.get("text") or ""), "segments": visible_segments, "box_px": item.get("box_px")})

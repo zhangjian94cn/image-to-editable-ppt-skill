@@ -88,6 +88,28 @@ def test_text_coverage_ignores_dynamic_placeholders_and_text_hidden_by_later_pic
     }
 
 
+def test_text_coverage_excludes_text_partially_occluded_by_multiple_later_pictures(tmp_path: Path):
+    pptx = tmp_path / "candidate.pptx"
+    presentation = Presentation()
+    presentation.slides.add_slide(presentation.slide_layouts[6])
+    presentation.save(pptx)
+    expected = tmp_path / "expected.json"
+    expected.write_text(json.dumps({"objects": [
+        {"kind": "text", "text": "被多个截图遮挡而无法可靠恢复的页脚", "box_px": [100, 800, 1000, 50]},
+        {"kind": "picture", "box_px": [100, 790, 100, 70]},
+        {"kind": "picture", "box_px": [400, 790, 100, 70]},
+        {"kind": "picture", "box_px": [800, 790, 100, 70]},
+    ]}, ensure_ascii=False))
+
+    metrics = _pptx_metrics(pptx, expected)
+
+    assert metrics["text_coverage"] is None
+    assert metrics["excluded_expected_texts"] == [{
+        "text": "被多个截图遮挡而无法可靠恢复的页脚",
+        "reason": "partially_occluded_by_later_picture",
+    }]
+
+
 def test_text_coverage_excludes_low_confidence_ocr_from_exact_gate(tmp_path: Path):
     pptx = tmp_path / "candidate.pptx"
     presentation = Presentation()

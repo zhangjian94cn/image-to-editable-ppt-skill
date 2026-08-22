@@ -35,6 +35,9 @@ ready result. Keep the evidence and fail clearly.
    Reconcile every hint with the visible source. `inspect text` also writes an
    enlarged high-contrast footer strip; view it whenever the source has small
    legal text, a page number, units, or a pale footer.
+   After writing the multimodal transcript, run `editppt inspect transcript`
+   to surface exact disagreements with independent OCR. Resolve each conflict
+   by re-viewing the source; neither provider wins automatically.
 3. Rebuild titles, body copy, numbers, tables, timelines, containers,
    connectors, and ordinary charts as native editable objects. Use compact,
    independent source-pixel assets only for logos, photos, screenshots, maps,
@@ -104,7 +107,7 @@ for commands. The canonical task prompt is [prompts/page-task.md](prompts/page-t
 
 ```bash
 editppt prepare <input...>
-editppt inspect vision|text|layout|structure|pptx ...
+editppt inspect vision|text|transcript|layout|structure|pptx ...
 editppt assets crop|separate|split-alpha|remove-chroma|brand ...
 editppt build <page-dir>
 editppt text-fit ...

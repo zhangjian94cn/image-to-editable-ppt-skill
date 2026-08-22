@@ -32,7 +32,7 @@ from runtime_env import config_path, read_config_file
 from source_inspect import inspect_layout, inspect_structure
 from text_fit_tool import measure as measure_text
 from text_fit_tool import write_result as write_text_fit
-from editppt.text_evidence import normalize_text
+from editppt.text_evidence import normalize_text, region_text_coverage
 from editppt.visual_inputs import prepare_visual_inputs
 
 
@@ -256,6 +256,47 @@ def cmd_inspect_vision(args: argparse.Namespace) -> int:
         "manifest": payload["manifest"],
         "images": [value["path"] for value in payload["images"]],
     })
+    return 0
+
+
+def cmd_inspect_transcript(args: argparse.Namespace) -> int:
+    page = Path(args.page_dir).expanduser().resolve()
+    transcript_path = page / args.input
+    reference_path = page / args.against
+    transcript = _json(transcript_path)
+    reference = _json(reference_path)
+    if not transcript_path.is_file() or not isinstance(transcript.get("lines"), list):
+        print(f"invalid transcript evidence: {transcript_path}", file=sys.stderr)
+        return 2
+    if not reference_path.is_file() or not isinstance(reference.get("lines"), list):
+        print(f"invalid reference text evidence: {reference_path}", file=sys.stderr)
+        return 2
+    expected = [
+        {"text": str(value.get("text") or ""), "box_px": value.get("box_px")}
+        for value in reference["lines"] if isinstance(value, dict)
+    ]
+    candidate = [
+        {"text": str(value.get("text") or ""), "box_px": value.get("box_px")}
+        for value in transcript["lines"] if isinstance(value, dict)
+    ]
+    evidence = region_text_coverage(expected, candidate)
+    payload = {
+        "status": "ready",
+        "advisory": True,
+        "transcript": str(transcript_path),
+        "reference": str(reference_path),
+        "reference_coverage": evidence["text_coverage"],
+        "missing_reference_count": evidence["missing_text_count"],
+        "missing_reference_texts": evidence["missing_texts"],
+        "instruction": (
+            "Re-view the attached source/detail image for every disagreement. "
+            "Never automatically replace the transcript with OCR text."
+        ),
+    }
+    out = page / args.out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _print_json(payload)
     return 0
 
 
@@ -521,6 +562,15 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_vision.add_argument("--target-edge", type=int, default=1792)
     inspect_vision.add_argument("--overlap-ratio", type=float, default=0.08)
     inspect_vision.set_defaults(func=cmd_inspect_vision)
+    inspect_transcript = inspect_sub.add_parser(
+        "transcript",
+        help="Compare Codex multimodal transcription with independent OCR evidence.",
+    )
+    inspect_transcript.add_argument("page_dir")
+    inspect_transcript.add_argument("--input", default="source-transcript.json")
+    inspect_transcript.add_argument("--against", default="text_hints.json")
+    inspect_transcript.add_argument("--out", default=".editppt/inspect-transcript.json")
+    inspect_transcript.set_defaults(func=cmd_inspect_transcript)
     inspect_layout_parser = inspect_sub.add_parser("layout", help="Measure broad content and whitespace bands.")
     inspect_layout_parser.add_argument("page_dir")
     inspect_layout_parser.add_argument("--source", default="source.png")

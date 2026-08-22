@@ -98,6 +98,21 @@ class SimpleCliTest(unittest.TestCase):
                 self.assertTrue((page / item["path"]).is_file())
                 self.assertEqual(64, len(item["sha256"]))
 
+    def test_inspect_transcript_surfaces_independent_text_disagreement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            page = Path(temporary)
+            (page / "text_hints.json").write_text(json.dumps({
+                "lines": [{"text": "灵犀晓伴顾问", "box_px": [100, 100, 200, 30]}]
+            }), encoding="utf-8")
+            (page / "source-transcript.json").write_text(json.dumps({
+                "lines": [{"text": "灵犀伴顾问", "box_px": [100, 100, 200, 30]}]
+            }), encoding="utf-8")
+            completed = run_cli("inspect", "transcript", page)
+            self.assertEqual(0, completed.returncode, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(1, payload["missing_reference_count"])
+            self.assertEqual(["灵犀晓伴顾问"], payload["missing_reference_texts"])
+
     def test_prepare_uses_stable_authoring_space_and_crop_restores_original_pixels(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

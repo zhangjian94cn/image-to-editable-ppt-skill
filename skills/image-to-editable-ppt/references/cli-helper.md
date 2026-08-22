@@ -18,6 +18,7 @@ Normalizes images, PDFs, or visual PPTX files into ordered page directories.
 ```bash
 editppt inspect vision /page
 editppt inspect text /page
+editppt inspect transcript /page --input source-transcript.json --against text_hints.json
 editppt inspect layout /page
 editppt inspect structure /page
 editppt inspect pptx /page --input page.pptx
@@ -29,6 +30,9 @@ editppt inspect pptx /page --input page.pptx
   not OCR, and has no operating-system OCR dependency.
 - `text`: content-aware OCR when configured, otherwise explicitly labeled
   geometric hints.
+- `transcript`: advisory, geometry-aware differences between the Codex
+  multimodal transcript and independent OCR. Re-view the attached detail image
+  for each difference; it never silently chooses one provider.
 - `layout`: content and whitespace bands in source pixels.
 - `structure`: source-space line and rectangle candidates; no semantic object
   IDs or containment decisions.

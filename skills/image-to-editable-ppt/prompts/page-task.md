@@ -32,14 +32,20 @@ evidence contract:
 
 Record every visible line you can read, character-for-character. Never use
 plausible completion or paraphrasing. Put genuinely unreadable fragments in
-`uncertain` instead of inventing text. Treat OCR output only as a second
+`uncertain` instead of inventing text. If any characters are covered by a
+later screenshot or other object, record only the visible fragment in
+`uncertain` with reason `partially_occluded`; do not reconstruct a familiar
+legal phrase from the readable words. Treat OCR output only as a second
 opinion against this multimodal transcript.
 
 You may use the Skill's OCR,
 layout, structure, source-pixel asset, Builder, text-fit, PowerPoint render,
 PPTX inspection, and comparison tools.
-After `editppt inspect text .`, compare its hints with
-`source-transcript.json`. Before finalizing, run
+After `editppt inspect text .`, run
+`editppt inspect transcript . --input source-transcript.json --against text_hints.json`.
+For every reported disagreement, re-view the relevant attached detail image;
+correct a real transcription error, or keep the source-visible reading and
+record why the OCR evidence is wrong. Before finalizing, run
 `editppt inspect pptx . --text-hints source-transcript.json`; read
 `text_evidence.missing_texts` and either restore
 each visible source line or explicitly verify that the OCR hint is wrong.
