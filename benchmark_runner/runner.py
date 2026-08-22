@@ -674,6 +674,7 @@ def _skill_diagnostics(work: Path) -> dict[str, Any]:
         "max_role_size_deviation_ratio": round(max_role_deviation, 4),
         "layer_conflict_count": len(layers.get("conflicts") or []),
         "unlayered_overlap_count": len(layers.get("unlayered_overlaps") or []),
+        "duplicate_text_overlap_count": len(layers.get("duplicate_text_overlaps") or []),
         "evidence_cache_hit": evidence.get("cache_hit") if evidence else None,
         "ocr_status": str(ocr.get("status") or "missing"),
         "ocr_provider": str(ocr.get("provider") or "missing"),
@@ -769,6 +770,12 @@ def _issues(
                 f"未声明同层重叠 {int(metrics.get('unlayered_overlap_count') or 0)} 对"
             ),
         })
+    if int(metrics.get("duplicate_text_overlap_count") or 0):
+        issues.append({
+            "severity": "P1",
+            "category": "content",
+            "message": f"{metrics['duplicate_text_overlap_count']} 对重叠文本重复绘制同一内容，应合并为富文本 runs",
+        })
     coarse = float(metrics.get("coarse_rgb_loss") or 0.0)
     ink = float(metrics.get("content_ink_loss") or 0.0)
     if coarse >= 0.1 or ink >= 0.1:
@@ -827,7 +834,7 @@ def _report(
         "font_substitution_count", "powerpoint_dfonts_resolution_count",
         "role_shrink_warning_count", "role_size_deviation_count",
         "max_role_size_deviation_ratio", "layer_conflict_count",
-        "unlayered_overlap_count", "evidence_cache_hit", "ocr_status", "ocr_provider",
+        "unlayered_overlap_count", "duplicate_text_overlap_count", "evidence_cache_hit", "ocr_status", "ocr_provider",
     ):
         if name in metrics and metrics[name] is not None:
             lines.append(f"| `{name}` | `{metrics[name]}` |")
@@ -996,6 +1003,7 @@ def _summary(run_dir: Path, run_meta: dict[str, Any], outcomes: Iterable[PageOut
     layer_issues = sum(
         int(value.metrics.get("layer_conflict_count") or 0)
         + int(value.metrics.get("unlayered_overlap_count") or 0)
+        + int(value.metrics.get("duplicate_text_overlap_count") or 0)
         for value in values
     )
     cache_values = [

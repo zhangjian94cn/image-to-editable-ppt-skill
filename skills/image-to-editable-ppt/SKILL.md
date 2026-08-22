@@ -84,6 +84,8 @@ PowerPoint render.
 - Resolve every unmeasured `role_size_deviation` before delivery. For an
   ordinary flat bar or line chart, prefer the shared editable chart components
   instead of duplicating chart geometry and typography in page code.
+- Do not overlay a colored label on top of another text box containing the same
+  label. Use rich-text runs; the Builder reports duplicate text overlaps.
 - Give every overlapping object a named `layer`. For a card header use
   `container → decoration_behind → band → text`; repair stack order before
   changing source geometry. An explicit `z_index` remains an escape hatch and

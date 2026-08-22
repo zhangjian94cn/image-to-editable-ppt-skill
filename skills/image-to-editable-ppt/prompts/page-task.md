@@ -108,6 +108,9 @@ Also resolve every `role_size_deviation` whose `measured_override` is false:
 either use the common role size, choose the correct semantic role, or mark the
 specific size as measured only when the source image or evidence actually
 supports it. Do not silence the diagnostic with an invented measurement.
+Fix every `.editppt/layer-report.json` `duplicate_text_overlaps` entry: use one text
+box with rich-text runs instead of drawing a colored label over a second copy
+of the same label inside the full sentence.
 
 Generate `page.pptx`, run `editppt render` on that exact file, and view the
 resulting `preview.png`. Repair visible content omissions, overlaps, overflow,

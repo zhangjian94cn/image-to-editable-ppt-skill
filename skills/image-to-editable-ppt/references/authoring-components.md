@@ -147,6 +147,10 @@ page.add_editable_line_chart(
 Chart geometry is expressed in source pixels. All chart output is native and
 editable; the helpers never rasterize a graph. Use them for conventional flat
 charts and keep unusual infographics in lower-level source-space objects.
+Both helpers accept `layer="content"`. The line helper accepts
+`marker_fill` and the common alias `marker_color`; the bar helper accepts
+`bar_fill`. Font sizes are source pixels (`title_font_size_px`,
+`label_font_size_px`, `tick_font_size_px`). Grid lines never have arrowheads.
 
 All coordinates are source pixels. Do not hard-code a benchmark filename or
 case-specific coordinate rule into the shared library.

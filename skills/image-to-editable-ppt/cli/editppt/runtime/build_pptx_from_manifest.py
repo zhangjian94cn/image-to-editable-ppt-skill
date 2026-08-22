@@ -1297,6 +1297,31 @@ def build_report(normalized, out_path):
             if boxes_overlap(first["box"], second["box"]):
                 unlayered_overlaps.append({"first": first["id"], "second": second["id"], "z_index": first["z_index"]})
 
+    text_layer_objects = []
+    for index, item in enumerate(normalized.get("text_boxes", []), start=1):
+        compact = re.sub(r"[\s\u3000]+", "", "".join(iter_text_lines(item))).strip()
+        if compact:
+            text_layer_objects.append({
+                "id": f"text-{index}",
+                "text": compact,
+                "excerpt": compact[:80],
+                "box": {key: float(item[key]) for key in ("left", "top", "width", "height") if key in item},
+            })
+    duplicate_text_overlaps = []
+    for first_index, first in enumerate(text_layer_objects):
+        for second in text_layer_objects[first_index + 1:]:
+            shorter, longer = sorted((first["text"], second["text"]), key=len)
+            if len(shorter) < 3 or shorter not in longer:
+                continue
+            if boxes_overlap(first["box"], second["box"]):
+                duplicate_text_overlaps.append({
+                    "first": first["id"],
+                    "second": second["id"],
+                    "duplicated_excerpt": shorter[:80],
+                    "first_excerpt": first["excerpt"],
+                    "second_excerpt": second["excerpt"],
+                })
+
     warnings = []
     if severe_adjustments:
         warnings.append(f"{len(severe_adjustments)} text boxes were shrunk below 75% of requested size")
@@ -1309,6 +1334,8 @@ def build_report(normalized, out_path):
         warnings.append(f"{len(layer_conflicts)} objects declare both layer and a conflicting z_index; z_index won")
     if unlayered_overlaps:
         warnings.append(f"{len(unlayered_overlaps)} same-z overlapping object pairs have no named layer")
+    if duplicate_text_overlaps:
+        warnings.append(f"{len(duplicate_text_overlaps)} overlapping text pairs duplicate the same visible content; use one rich-text box")
     return {
         "schema_version": 2,
         "output_pptx": str(Path(out_path).resolve()),
@@ -1332,6 +1359,7 @@ def build_report(normalized, out_path):
             "objects": layer_objects,
             "conflicts": layer_conflicts,
             "unlayered_overlaps": unlayered_overlaps,
+            "duplicate_text_overlaps": duplicate_text_overlaps,
         },
         "warnings": warnings,
     }

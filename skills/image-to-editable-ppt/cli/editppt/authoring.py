@@ -71,6 +71,9 @@ class SlideManifest:
         **extra: Any,
     ) -> dict[str, Any]:
         if isinstance(box_or_kind, str):
+            if isinstance(kind, (list, tuple)) and box_px is None:
+                box_px = kind
+                kind = None
             if kind is not None and kind != box_or_kind:
                 raise ValueError("shape kind was provided twice")
             resolved_kind = box_or_kind
@@ -462,6 +465,7 @@ class SlideManifest:
         label_font_size_px: float = 14,
         tick_font_size_px: float = 14,
         show_values: bool = False,
+        layer: str = "content",
     ) -> dict[str, list[dict[str, Any]]]:
         """Build a deterministic native-shape bar chart in source coordinates."""
 
@@ -522,7 +526,7 @@ class SlideManifest:
             result["bars"].append(
                 self.add_shape(
                     [center - bar_width / 2, plot_top + plot_height - bar_height, bar_width, max(1.0, bar_height)],
-                    fill=bar_fill, stroke="none", layer="content",
+                    fill=bar_fill, stroke="none", layer=layer,
                 )
             )
             result["labels"].append(
@@ -555,12 +559,14 @@ class SlideManifest:
         fill: str = "#FFFFFF",
         line_color: str = "#2387D0",
         marker_fill: str = "#F05A67",
+        marker_color: str | None = None,
         grid_color: str = "#D9D9D9",
         text_color: str = "#111111",
         title_font_size_px: float = 24,
         label_font_size_px: float = 14,
         tick_font_size_px: float = 14,
         show_values: bool = True,
+        layer: str = "content",
     ) -> dict[str, list[dict[str, Any]]]:
         """Build a native editable line chart with deterministic typography."""
 
@@ -617,7 +623,9 @@ class SlideManifest:
             [plot_left + step * index, plot_top + plot_height * (1.0 - (value - lower) / (upper - lower))]
             for index, value in enumerate(numeric)
         ]
-        result["line"].append(self.add_polyline(points, stroke=line_color, stroke_width=3, layer="content"))
+        if marker_color is not None:
+            marker_fill = marker_color
+        result["line"].append(self.add_polyline(points, stroke=line_color, stroke_width=3, layer=layer))
         marker = max(5.0, label_font_size_px * 0.55)
         for index, (label, value, point) in enumerate(zip(labels, numeric, points)):
             px, py = point

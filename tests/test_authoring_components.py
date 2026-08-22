@@ -161,6 +161,8 @@ def test_editable_chart_components_build_native_shapes_and_consistent_caption_ro
             minimum=10,
             maximum=55,
             grid_values=[10, 25, 40, 55],
+            marker_color="#F05A67",
+            layer="content",
         )
         value.write(page / "manifest.json")
 
@@ -196,6 +198,24 @@ def test_editable_chart_components_reject_invalid_data_contracts():
         page.add_editable_bar_chart([10, 10, 400, 250], ["A"], [2], maximum=1)
     with pytest.raises(ValueError, match="at least two"):
         page.add_editable_line_chart([10, 10, 400, 250], ["A"], [1])
+
+
+def test_builder_warns_when_overlapping_text_duplicates_a_visible_prefix():
+    with tempfile.TemporaryDirectory() as temporary:
+        page = Path(temporary)
+        Image.new("RGB", (1600, 900), "white").save(page / "source.png")
+        value = SlideManifest(1600, 900)
+        value.add_text([100, 100, 600, 60], "分析结论：Token消耗增速放缓", font_size_px=20)
+        value.add_text([100, 100, 130, 60], "分析结论：", font_size_px=20, color="#0085D0")
+        value.write(page / "manifest.json")
+
+        built = run_cli("build", page)
+
+        assert built.returncode == 0, built.stderr
+        payload = json.loads(built.stdout)
+        report = json.loads(Path(payload["layer_report"]).read_text())
+        assert report["duplicate_text_overlaps"][0]["duplicated_excerpt"] == "分析结论："
+        assert any("duplicate the same visible content" in warning for warning in payload["warnings"])
 
 
 def test_explicit_z_index_wins_over_named_layer_with_visible_warning():
@@ -316,6 +336,7 @@ def test_polygon_helper_uses_source_space_points():
 def test_shape_helper_accepts_kind_first_and_open_polyline_points():
     value = SlideManifest(1600, 900)
     rect = value.add_shape("rect", box_px=[20, 30, 100, 50], fill="#EAF3FF")
+    positional_rect = value.add_shape("roundRect", [140, 30, 100, 50], fill="#EAF3FF")
     path = value.add_shape(
         "line",
         points_px=[[100, 100], [160, 100], [160, 180], [240, 180]],
@@ -325,6 +346,7 @@ def test_shape_helper_accepts_kind_first_and_open_polyline_points():
     )
 
     assert rect["box_px"] == [20.0, 30.0, 100.0, 50.0]
+    assert positional_rect["box_px"] == [140.0, 30.0, 100.0, 50.0]
     assert path["type"] == "polyline"
     assert path["polyline_px"][-1] == [240.0, 180.0]
 
